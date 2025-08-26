@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: ecom-order
+Version: 0.1.0
+Summary: Order service (checkout + inventory reservation + Kafka)
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn>=0.30.0
+Requires-Dist: pydantic>=2.5.0
+Requires-Dist: sqlalchemy>=2.0.25
+Requires-Dist: alembic>=1.13.0
+Requires-Dist: psycopg[binary]>=3.1.10
+Requires-Dist: redis>=5.0.4
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: kafka-python>=2.0.2
+Requires-Dist: PyJWT>=2.9.0

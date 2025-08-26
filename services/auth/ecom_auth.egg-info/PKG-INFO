@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: ecom-auth
+Version: 0.1.0
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn>=0.30.0
+Requires-Dist: pydantic[email]>=2.5.0
+Requires-Dist: sqlalchemy>=2.0.25
+Requires-Dist: alembic>=1.13.0
+Requires-Dist: psycopg[binary]>=3.1.10
+Requires-Dist: passlib[bcrypt]>=1.7.4
+Requires-Dist: PyJWT>=2.9.0

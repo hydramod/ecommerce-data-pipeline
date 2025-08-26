@@ -1,0 +1,13 @@
+psycopg>=3.1.10
+alembic>=1.13.0
+fastapi==0.116.1
+httpx==0.28.1
+kafka-python>=2.0.2
+minio==7.2.16
+passlib==1.7.4
+pydantic==2.11.7
+PyJWT==2.10.1
+redis==6.4.0
+SQLAlchemy==2.0.43
+sqlalchemy>=2.0.25
+uvicorn>=0.30.0

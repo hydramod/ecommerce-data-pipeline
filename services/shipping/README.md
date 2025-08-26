@@ -1,0 +1,143 @@
+# Shipping Service
+
+Handles shipment lifecycle for orders: create a shipment draft at checkout, advance to **READY\_TO\_SHIP** after successful payment, allow dispatch, and emit shipping-related events consumed by other services.
+
+* Health: `/health`, `/shipping/health`, service info: `/v1/_info`.&#x20;
+* Consumes Kafka **payment** events; produces **shipping** events. Topic names are configurable via env vars.
+
+---
+
+## Data model
+
+`shipments` table (SQLAlchemy model):
+
+* `id` (PK), `order_id`, `user_email`
+* Address fields: `address_line1`, `address_line2`, `city`, `country` (ISO2), `postcode`
+* Carrier/tracking: `carrier`, `tracking_number`
+* `status`: enum = `PENDING_PAYMENT | READY_TO_SHIP | DISPATCHED | DELIVERED | CANCELLED`
+* Timestamps: `created_at`, `updated_at`
+  See `Shipment` and `ShipmentStatus` for the canonical schema and allowed states.&#x20;
+
+### State transitions
+
+* On shipment creation → `PENDING_PAYMENT`.
+* When a `payment.succeeded` event arrives for the same `order_id` → status updated to `READY_TO_SHIP`, and a `shipping.ready` event is emitted.&#x20;
+* Dispatch endpoint moves to `DISPATCHED` (and can emit to the shipping topic).&#x20;
+
+---
+
+## API
+
+> All routes below are shown with the **gateway** prefix (`/shipping/...`). When calling the service container directly (port 8000), drop `/shipping`.
+
+### Create a shipment (draft)
+
+```
+POST /shipping/v1/shipments
+```
+
+Body (example):
+
+```json
+{
+  "order_id": 123,
+  "user_email": "cust@example.com",
+  "address_line1": "1 Demo Street",
+  "address_line2": "",
+  "city": "Dublin",
+  "country": "IE",
+  "postcode": "D01XYZ"
+}
+```
+
+Result: the new shipment with `status: "PENDING_PAYMENT"`.
+
+### List shipments
+
+```
+GET /shipping/v1/shipments?order_id=123
+```
+
+Returns an array of shipments for that order (used by the demo to poll for `READY_TO_SHIP`).
+
+### Dispatch a shipment
+
+```
+POST /shipping/v1/shipments/{shipment_id}/dispatch
+```
+
+Transitions status from `READY_TO_SHIP` → `DISPATCHED` and can emit a shipping event for downstream consumers.&#x20;
+
+### Health & Info
+
+* `GET /health` (container-local) and `GET /shipping/health` (via gateway) return `{ "status": "ok" }`.
+* `GET /v1/_info` returns `{ service: "shipping", version: "<semver>" }`.&#x20;
+
+OpenAPI docs available at `/docs` when accessing the container directly (port 8000).
+
+---
+
+## Events (Kafka)
+
+* **Consumes**: `payment.events` — looks for `{"type":"payment.succeeded","order_id":...}` to unblock shipping. Group id: `shipping-service`.&#x20;
+* **Produces**: `shipping.events` — e.g., `{"type":"shipping.ready","order_id":...,"shipment_id":...}` on state change.&#x20;
+
+Topic names and Kafka bootstrap server are configurable via env vars (see below). Defaults:
+
+````text
+KAFKA_BOOTSTRAP=kafka:9092
+TOPIC_PAYMENT_EVENTS=payment.events
+TOPIC_SHIPPING_EVENTS=shipping.events
+TOPIC_ORDER_EVENTS=order.events
+``` :contentReference[oaicite:9]{index=9}
+
+---
+
+## Configuration
+
+Set via environment variables:
+
+| Variable                | Default                                                           | Purpose                                  |
+|-------------------------|-------------------------------------------------------------------|------------------------------------------|
+| `POSTGRES_DSN`          | `postgresql+psycopg://postgres:postgres@postgres:5432/appdb`     | Database connection string               |
+| `KAFKA_BOOTSTRAP`       | `kafka:9092`                                                      | Kafka bootstrap servers                  |
+| `TOPIC_PAYMENT_EVENTS`  | `payment.events`                                                  | Topic to consume payment events          |
+| `TOPIC_SHIPPING_EVENTS` | `shipping.events`                                                 | Topic to publish shipping events         |
+| `TOPIC_ORDER_EVENTS`    | `order.events`                                                    | Reserved for future use                  | :contentReference[oaicite:10]{index=10}
+
+---
+
+## Running locally
+
+### With Docker (recommended)
+
+- The repository’s `deploy/docker-compose.yaml` wires the service behind Traefik at `/shipping`. Ensure the `.env` has matching Kafka/Postgres settings.
+
+### Database migrations
+
+Alembic migrations are included under `alembic/`. Use your repo’s seed script to apply them (it upgrades all services, including shipping). The ORM base/engine/session are defined here: :contentReference[oaicite:11]{index=11}
+
+---
+
+## Service process
+
+- FastAPI app is created and the shipping Kafka consumer is started on application startup, and stopped on shutdown. This keeps the payment→shipping handoff automatic. :contentReference[oaicite:12]{index=12}
+
+---
+
+## Troubleshooting
+
+- **No shipment found after checkout**: confirm the order service successfully called the shipping create endpoint and that migrations ran (table `shipments` exists). Model name/table: `Shipment` / `shipments`. :contentReference[oaicite:13]{index=13}
+- **Shipment stuck at `PENDING_PAYMENT`**: ensure the `payment.succeeded` event is published to the expected topic and `KAFKA_BOOTSTRAP`/topic names match the shipping service config. 
+- **Events not visible**: verify producer configuration and that consumers are reading from `TOPIC_SHIPPING_EVENTS`. :contentReference[oaicite:15]{index=15}
+
+---
+
+## Version
+
+Exposed via `/v1/_info`. The app also logs routes on startup for quick debugging. :contentReference[oaicite:16]{index=16}
+
+--- 
+
+*See the root README for stack bring-up and the demo script that exercises the shipping flow end-to-end.*
+````

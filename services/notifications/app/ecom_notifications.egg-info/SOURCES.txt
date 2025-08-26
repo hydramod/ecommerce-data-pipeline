@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+app/api/routes.py
+app/core/config.py
+app/ecom_notifications.egg-info/PKG-INFO
+app/ecom_notifications.egg-info/SOURCES.txt
+app/ecom_notifications.egg-info/dependency_links.txt
+app/ecom_notifications.egg-info/requires.txt
+app/ecom_notifications.egg-info/top_level.txt
+app/kafka/consumer.py
+tests/test_health.py

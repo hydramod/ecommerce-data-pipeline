@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecom-payment"
+version = "0.1.0"
+description = "Payment mock service (Kafka events)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.116.1",
+    "uvicorn==0.35.0",
+    "pydantic==2.11.7",
+    "kafka-python==2.2.15",
+    "prometheus-fastapi-instrumentator==7.1.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio", "httpx", "requests"]
+dev = ["pytest", "black", "flake8", "mypy", "pytest-asyncio"]
+
+[tool.setuptools.packages.find]
+where = [""]
+include = ["app*"]

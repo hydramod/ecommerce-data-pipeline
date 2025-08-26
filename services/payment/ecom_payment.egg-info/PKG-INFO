@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: ecom-payment
+Version: 0.1.0
+Summary: Payment mock service (Kafka events)
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn>=0.30.0
+Requires-Dist: pydantic>=2.5.0
+Requires-Dist: kafka-python>=2.0.2

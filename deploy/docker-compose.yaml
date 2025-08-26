@@ -1,0 +1,220 @@
+services:
+  gateway:
+    image: traefik:v3.1
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+    ports: ["80:80","8080:8080"]
+    depends_on: [auth, catalog, cart, order, payment, shipping, notifications]
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks: [mesh]
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-appdb}
+    ports: ["5432:5432"]
+    networks: [mesh]
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+    networks: [mesh]
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks: [mesh]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports: ["9092:9092"]
+    depends_on: [zookeeper]
+    networks: [mesh]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    ports: ["9000:9000","9001:9001"]
+    networks: [mesh]
+
+  # Dev SMTP (Notifications)
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports: ["1025:1025","8025:8025"]
+    networks: [mesh]
+
+  # ---------- Monitoring ----------
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - auth
+      - catalog
+      - order
+      - cart
+      - payment
+      - shipping
+      - notifications
+      - postgres-exporter
+      - redis-exporter
+      - kafka-exporter
+    networks: [mesh]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks: [mesh]
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-appdb}?sslmode=disable"
+    ports: ["9187:9187"]
+    depends_on: [postgres]
+    networks: [mesh]
+
+  redis-exporter:
+    image: bitnami/redis-exporter:latest
+    command: ["--redis.addr=redis://redis:6379"]
+    ports: ["9121:9121"]
+    depends_on: [redis]
+    networks: [mesh]
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    command:
+      - "--kafka.server=kafka:9092"
+    ports: ["9308:9308"]
+    depends_on: [kafka]
+    networks: [mesh]
+
+  auth:
+    build: ../services/auth
+    env_file: [.env]
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      POSTGRES_DSN: ${POSTGRES_DSN}
+    labels:
+      - "traefik.http.routers.auth.rule=PathPrefix(`/auth`) || PathPrefix(`/users`)"
+      - "traefik.http.services.auth.loadbalancer.server.port=8000"
+    depends_on: [postgres]
+    networks: [mesh]
+
+  catalog:
+    build: ../services/catalog
+    env_file: [.env]
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      POSTGRES_DSN: ${POSTGRES_DSN}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
+    labels:
+      - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
+      - "traefik.http.services.catalog.loadbalancer.server.port=8000"
+    depends_on: [postgres, minio]
+    networks: [mesh]
+
+  cart:
+    build: ../services/cart
+    env_file: [.env]
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      REDIS_URL: ${REDIS_URL}
+      SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
+      CATALOG_BASE: http://catalog:8000
+    labels:
+      - "traefik.http.routers.cart.rule=PathPrefix(`/cart`)"
+      - "traefik.http.services.cart.loadbalancer.server.port=8000"
+    depends_on: [redis, catalog]
+    networks: [mesh]
+
+  order:
+    build: ../services/order
+    env_file: [.env]
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      POSTGRES_DSN: ${POSTGRES_DSN}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
+      SHIPPING_BASE: http://shipping:8000
+    labels:
+      - "traefik.http.routers.order.rule=PathPrefix(`/order`)"
+      - "traefik.http.services.order.loadbalancer.server.port=8000"
+    depends_on: [postgres, kafka]
+    networks: [mesh]
+
+  payment:
+    build: ../services/payment
+    env_file: [.env]
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      POSTGRES_DSN: ${POSTGRES_DSN}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      REDIS_URL: ${REDIS_URL}
+      SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
+    labels:
+      - "traefik.http.routers.payment.rule=PathPrefix(`/payment`)"
+      - "traefik.http.services.payment.loadbalancer.server.port=8000"
+    depends_on: [postgres, kafka, redis]
+    networks: [mesh]
+
+  shipping:
+    build: ../services/shipping
+    env_file: [.env]
+    environment:
+      POSTGRES_DSN: ${POSTGRES_DSN}
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-order.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payment.events}
+      TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
+    labels:
+      - "traefik.http.routers.shipping.rule=PathPrefix(`/shipping`)"
+      - "traefik.http.services.shipping.loadbalancer.server.port=8000"
+    depends_on: [postgres, kafka]
+    networks: [mesh]
+
+  notifications:
+    build: ../services/notifications
+    env_file: [.env]
+    environment:
+      KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      SMTP_HOST: ${SMTP_HOST:-mailhog}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      FROM_EMAIL: ${FROM_EMAIL:-no-reply@example.local}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-order.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payment.events}
+      TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
+    labels:
+      - "traefik.http.routers.notifications.rule=PathPrefix(`/notifications`)"
+      - "traefik.http.services.notifications.loadbalancer.server.port=8000"
+    depends_on: [kafka, mailhog]
+    networks: [mesh]
+
+networks:
+  mesh: {}

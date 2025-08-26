@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+app/main.py
+app/version.py
+app/api/routes.py
+app/core/config.py
+app/db/models.py
+app/db/session.py
+app/kafka/consumer.py
+app/kafka/producer.py
+ecom_order.egg-info/PKG-INFO
+ecom_order.egg-info/SOURCES.txt
+ecom_order.egg-info/dependency_links.txt
+ecom_order.egg-info/requires.txt
+ecom_order.egg-info/top_level.txt
+tests/test_health.py

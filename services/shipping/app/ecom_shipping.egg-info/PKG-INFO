@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: ecom-shipping
+Version: 0.1.0
+Summary: E-commerce Shipping microservice
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi==0.111.0
+Requires-Dist: uvicorn[standard]==0.30.0
+Requires-Dist: pydantic==2.7.0
+Requires-Dist: SQLAlchemy==2.0.31
+Requires-Dist: psycopg[binary,pool]==3.2.1
+Requires-Dist: alembic==1.13.2
+Requires-Dist: kafka-python==2.0.2
+Requires-Dist: httpx==0.27.0
+
+# Shipping Service
+
+- /health
+- /v1/_info
