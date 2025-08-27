@@ -41,6 +41,12 @@ services:
     ports: ["9092:9092"]
     depends_on: [zookeeper]
     networks: [mesh]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'dump' | nc localhost 9092 | grep -q Broker"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   minio:
     image: minio/minio:latest
@@ -51,13 +57,11 @@ services:
     ports: ["9000:9000","9001:9001"]
     networks: [mesh]
 
-  # Dev SMTP (Notifications)
   mailhog:
     image: mailhog/mailhog:v1.0.1
     ports: ["1025:1025","8025:8025"]
     networks: [mesh]
 
-  # ---------- Monitoring ----------
   prometheus:
     image: prom/prometheus:latest
     volumes:

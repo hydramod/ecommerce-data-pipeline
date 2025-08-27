@@ -33,14 +33,20 @@ def main():
     compose = find_compose_cmd()
     repo_root = Path(__file__).resolve().parents[1]
 
+    base_path = (repo_root / args.file).resolve()
+    override_path = (base_path.parent / "docker-compose.override.yaml").resolve()
+    f_flags = ["-f", str(base_path)]
+    if override_path.exists():
+        f_flags += ["-f", str(override_path)]
+
     print(">>> Cleaning and rebuilding all services without cache...")
-    build_cmd = compose + ["-f", args.file, "--env-file", args.env_file, "build"]
+    build_cmd = compose + f_flags + ["--env-file", args.env_file, "build"]
     if args.no_cache:
         build_cmd.append("--no-cache")
     run(build_cmd, cwd=repo_root)
 
     print(">>> Restarting services...")
-    up_cmd = compose + ["-f", args.file, "--env-file", args.env_file, "up", "-d"]
+    up_cmd = compose + f_flags + ["--env-file", args.env_file, "up", "-d"]
     run(up_cmd, cwd=repo_root)
 
     print(">>> Done! All services rebuilt and restarted.")

@@ -1,71 +1,60 @@
-#!/bin/bash
-# setup.sh — create venv and install all services in editable mode
+"""
+setup.py — create venv and install all services in editable mode
+"""
+import argparse, os, subprocess, sys
+from pathlib import Path
 
-set -e
+SERVICES = ["auth", "catalog", "order", "cart", "payment", "shipping", "notifications"]
 
-SERVICES=("auth" "catalog" "order" "cart" "payment" "shipping" "notifications")
-VENV_DIR="${1:-.venv}"
-PYTHON="${2:-python3}"
-SKIP_INSTALL=false
+def run(cmd, **kw):
+    print(">>>", " ".join(cmd))
+    subprocess.run(cmd, check=True, **kw)
 
-# Parse arguments
-for arg in "$@"; do
-    case $arg in
-        --skip-install)
-            SKIP_INSTALL=true
-            shift
-            ;;
-        --venv=*)
-            VENV_DIR="${arg#*=}"
-            shift
-            ;;
-        --python=*)
-            PYTHON="${arg#*=}"
-            shift
-            ;;
-    esac
-done
+def venv_paths(venv_dir: Path):
+    if os.name == "nt":
+        pip = venv_dir / "Scripts" / "pip.exe"
+        python = venv_dir / "Scripts" / "python.exe"
+        activate = venv_dir / "Scripts" / "Activate.ps1"
+    else:
+        pip = venv_dir / "bin" / "pip"
+        python = venv_dir / "bin" / "python"
+        activate = venv_dir / "bin" / "activate"
+    return pip, python, activate
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV_PATH="$REPO_ROOT/$VENV_DIR"
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--venv", default=".venv", help="Virtualenv directory")
+    ap.add_argument("--python", default=sys.executable, help="Python interpreter to create venv")
+    ap.add_argument("--skip-install", action="store_true", help="Skip installing services")
+    args = ap.parse_args()
 
-echo ">>> Creating venv at $VENV_PATH (if missing)"
-if [ ! -d "$VENV_PATH" ]; then
-    "$PYTHON" -m venv "$VENV_PATH"
-fi
+    repo_root = Path(__file__).resolve().parents[1]
+    venv_dir = repo_root / args.venv
 
-# Determine OS-specific paths
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-    PIP="$VENV_PATH/Scripts/pip.exe"
-    PYTHON="$VENV_PATH/Scripts/python.exe"
-    ACTIVATE="$VENV_PATH/Scripts/Activate.ps1"
-else
-    PIP="$VENV_PATH/bin/pip"
-    PYTHON="$VENV_PATH/bin/python"
-    ACTIVATE="$VENV_PATH/bin/activate"
-fi
+    print(f">>> Creating venv at {venv_dir} (if missing)")
+    if not venv_dir.exists():
+        run([args.python, "-m", "venv", str(venv_dir)])
 
-echo ">>> Upgrading pip"
-"$PIP" install -U pip
+    pip, py, activate = venv_paths(venv_dir)
 
-# Optional: dev tools (uncomment if you want)
-# "$PIP" install pre-commit ruff pytest
+    print(">>> Upgrading pip")
+    run([str(pip), "install", "-U", "pip"])
 
-if [ "$SKIP_INSTALL" = false ]; then
-    for service in "${SERVICES[@]}"; do
-        PROJ="$REPO_ROOT/services/$service/pyproject.toml"
-        if [ -f "$PROJ" ]; then
-            echo ">>> Installing services/$service (editable)"
-            "$PIP" install -e "$REPO_ROOT/services/$service"
-        fi
-    done
-fi
+    # Optional: dev tools (uncomment if you want)
+    # run([str(pip), "install", "pre-commit", "ruff", "pytest"])
 
-echo -e "\nSetup complete."
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-    echo "Activate your venv with:"
-    echo "  $ACTIVATE"
-else
-    echo "Activate your venv with:"
-    echo "  source $ACTIVATE"
-fi
+    if not args.skip_install:
+        for s in SERVICES:
+            proj = repo_root / "services" / s / "pyproject.toml"
+            if proj.exists():
+                print(f">>> Installing services/{s} (editable)")
+                run([str(pip), "install", "-e", f"services/{s}"], cwd=repo_root)
+
+    print("\nSetup complete.")
+    if os.name == "nt":
+        print(f"Activate your venv with:\n  {activate}")
+    else:
+        print(f"Activate your venv with:\n  source {activate}")
+
+if __name__ == "__main__":
+    main()
