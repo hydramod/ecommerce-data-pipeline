@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.db import models
 from app.core.config import settings
-from app.kafka.producer import send
+from app.kafka.producer import send, publish_order_event
 import jwt, json
 
 router = APIRouter()
@@ -92,6 +92,17 @@ def checkout(payload: ShippingAddress, identity: dict = Depends(get_identity_dep
         )
         db.add(oi)
     db.commit()
+
+    publish_order_event({
+        "event_type": "order_created",
+        "order_id": str(order.id),
+        "user_id": identity.get("sub"),
+        "items": [{"product_id": i.product_id, "qty": i.qty, "price": i.unit_price_cents / 100.0} for i in order.items],
+        "currency": order.currency,
+        "total_amount": order.total_cents / 100.0,
+        "status": order.status,  # e.g., "CREATED"
+        "event_time": order.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
 
     # Create shipment in Shipping service (draft: PENDING_PAYMENT)
     try:

@@ -1,7 +1,6 @@
-
 from fastapi import APIRouter
 from pydantic import BaseModel
-from app.kafka.producer import send
+from app.kafka.producer import send, emit_payment_event
 
 router = APIRouter()
 
@@ -35,3 +34,12 @@ def mock_succeed(payload: MockSucceed):
         "currency": payload.currency,
     })
     return {"status": "ok"}
+
+emit_payment_event(
+    order_id=str(order.id),
+    payment_id=str(payment.id),
+    amount_cents=payment.amount_cents,
+    currency=payment.currency,
+    method=payment.method,       # e.g. "card", "paypal"
+    status="captured",           # or "failed", etc.
+)

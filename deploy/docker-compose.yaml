@@ -41,12 +41,6 @@ services:
     ports: ["9092:9092"]
     depends_on: [zookeeper]
     networks: [mesh]
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo 'dump' | nc localhost 9092 | grep -q Broker"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
 
   minio:
     image: minio/minio:latest
@@ -151,7 +145,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       REDIS_URL: ${REDIS_URL}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
-      CATALOG_BASE: http://catalog:8000
+      CATALOG_BASE: ${CATALOG_BASE:-http://gateway/catalog}
     labels:
       - "traefik.http.routers.cart.rule=PathPrefix(`/cart`)"
       - "traefik.http.services.cart.loadbalancer.server.port=8000"
@@ -165,6 +159,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_ANALYTICS_TOPIC_ORDERS: ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
       SHIPPING_BASE: http://shipping:8000
     labels:
@@ -180,6 +175,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_ANALYTICS_TOPIC_PAYMENTS: ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1}
       REDIS_URL: ${REDIS_URL}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
@@ -220,5 +216,128 @@ services:
     depends_on: [kafka, mailhog]
     networks: [mesh]
 
+    kafka-ui:
+      image: provectuslabs/kafka-ui:latest
+      environment:
+        KAFKA_CLUSTERS_0_NAME: local
+        KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP}
+      ports: ["8085:8080"]
+      depends_on: [kafka]
+      networks: [mesh]
+
+  # Create analytics topics if they don't exist
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on: [kafka]
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      cub kafka-ready -b ${KAFKA_BOOTSTRAP} 1 60 &&
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
+        --topic ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}   --partitions 6 --replication-factor 1 &&
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
+        --topic ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1} --partitions 6 --replication-factor 1
+      "
+    networks: [mesh]
+
+  hive-metastore:
+    image: bitsondatadev/hive-metastore:3.1.3
+    environment:
+      METASTORE_DB_TYPE: postgres
+      METASTORE_DB_HOST: postgres
+      METASTORE_DB_NAME: ${POSTGRES_DB}
+      METASTORE_DB_USER: ${POSTGRES_USER}
+      METASTORE_DB_PASS: ${POSTGRES_PASSWORD}
+    ports: ["9083:9083"]
+    depends_on: [postgres]
+    networks: [mesh]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9083 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+    spark-master:
+      image: bitnami/spark:3.5
+      environment:
+        SPARK_MODE: master
+        SPARK_NO_DAEMONIZE: "yes"
+        # Delta + Hive + S3A
+        SPARK_SQL_EXTENSIONS: io.delta.sql.DeltaSparkSessionExtension
+        SPARK_SQL_CATALOG: org.apache.spark.sql.delta.catalog.DeltaCatalog
+        SPARK_PUBLIC_DNS: spark-master
+        # S3A (MinIO)
+        SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+        SPARK_CONF_DIR: /opt/bitnami/spark/conf
+        AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+        AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+        AWS_REGION: us-east-1
+        S3_ENDPOINT: ${S3_ENDPOINT}
+      volumes:
+        - ./analytics/spark/conf:/opt/bitnami/spark/conf:ro
+        - ./analytics/jobs:/opt/jobs:ro
+      ports: ["7077:7077","8081:8080"]
+      depends_on: [hive-metastore, kafka, kafka-init]
+      networks: [mesh]
+
+    spark-worker:
+      image: bitnami/spark:3.5
+      environment:
+        SPARK_MODE: worker
+        SPARK_MASTER_URL: spark://spark-master:7077
+        SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+        SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+        SPARK_NO_DAEMONIZE: "yes"
+        SPARK_CONF_DIR: /opt/bitnami/spark/conf
+        AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+        AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+        AWS_REGION: us-east-1
+        S3_ENDPOINT: ${S3_ENDPOINT}
+      volumes:
+        - ./analytics/spark/conf:/opt/bitnami/spark/conf:ro
+        - ./analytics/jobs:/opt/jobs:ro
+      depends_on: [spark-master]
+      networks: [mesh]
+
+    airflow:
+      image: apache/airflow:2.9.3
+      environment:
+        AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+        AIRFLOW__CORE__EXECUTOR: LocalExecutor
+        AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+        _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+        _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+      user: "0:0"
+      command: >
+        bash -lc '
+        airflow db init &&
+        airflow users create --role Admin --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" --firstname a --lastname b --email a@b.c || true &&
+        airflow webserver -p 8080 & airflow scheduler
+        '
+      volumes:
+        - ./analytics/dags:/opt/airflow/dags:ro
+        - ./analytics/jobs:/opt/jobs:ro
+      ports: ["8082:8080"]
+      depends_on: [spark-master]
+      networks: [mesh]
+
+    trino:
+      image: trinodb/trino:443
+      ports: ["8090:8080"]
+      volumes:
+        - ./analytics/trino/etc:/etc/trino:ro
+      depends_on: [hive-metastore]
+      networks: [mesh]
+
+    metabase:
+      image: metabase/metabase:latest
+      ports: ["3000:3000"]
+      environment:
+        MB_DB_FILE: /metabase.db
+      depends_on: [trino]
+      networks: [mesh]
+
 networks:
   mesh: {}
+volumes:
+  lake: {}

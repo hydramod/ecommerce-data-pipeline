@@ -1,45 +1,51 @@
 from datetime import datetime, timedelta
-import os
 from airflow import DAG
-from airflow.operators.bash import BashOperator
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
-DEFAULT_ARGS = {
+default_args = {
     "owner": "data",
     "retries": 1,
-    "retry_delay": timedelta(minutes=5),
+    "retry_delay": timedelta(minutes=3),
 }
 
-LAKE_PATH = os.getenv("LAKE_PATH", "/lake")
-KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
-
-# These jobs run inside the spark-master container using spark-submit
-SPARK_SUBMIT = "spark-submit --master spark://spark-master:7077"
-
-DAG_ID = "rt_pipeline"
-
 with DAG(
-    DAG_ID,
-    default_args=DEFAULT_ARGS,
+    "rt_pipeline",
+    default_args=default_args,
     start_date=datetime(2025, 8, 1),
-    schedule_interval=None,  # trigger manually or from CI; streaming jobs are long-running
+    schedule_interval="@hourly",  # streams are long-running; this is for restarts/health
     catchup=False,
-    tags=["realtime", "streaming", "delta"],
+    max_active_runs=1,
 ) as dag:
-
-    orders_bronze = BashOperator(
+    orders_bronze = SparkSubmitOperator(
         task_id="orders_bronze_stream",
-        bash_command=f"docker exec spark-master {SPARK_SUBMIT} /opt/jobs/bronze_orders.py",
+        conn_id="spark_default",
+        application="/opt/spark-jobs/bronze_orders.py",
+        name="orders-bronze",
+        application_args=[],
     )
-
-    payments_bronze = BashOperator(
+    payments_bronze = SparkSubmitOperator(
         task_id="payments_bronze_stream",
-        bash_command=f"docker exec spark-master {SPARK_SUBMIT} /opt/jobs/bronze_payments.py",
+        conn_id="spark_default",
+        application="/opt/spark-jobs/bronze_payments.py",
+        name="payments-bronze",
     )
-
-    silver_enrich = BashOperator(
+    silver_orders = SparkSubmitOperator(
+        task_id="silver_orders_stream",
+        conn_id="spark_default",
+        application="/opt/spark-jobs/silver_orders.py",
+        name="silver-orders",
+    )
+    silver_payments = SparkSubmitOperator(
+        task_id="silver_payments_stream",
+        conn_id="spark_default",
+        application="/opt/spark-jobs/silver_payments.py",
+        name="silver-payments",
+    )
+    silver_enrich = SparkSubmitOperator(
         task_id="silver_enrich_stream",
-        bash_command=f"docker exec spark-master {SPARK_SUBMIT} /opt/jobs/silver_enrich.py",
+        conn_id="spark_default",
+        application="/opt/spark-jobs/silver_enrich.py",
+        name="silver-enrich",
     )
 
-    # The silver job depends on both bronze ingests being up first
-    [orders_bronze, payments_bronze] >> silver_enrich
+    [orders_bronze, payments_bronze] >> [silver_orders, silver_payments] >> silver_enrich

@@ -1,0 +1,7 @@
+version: 2
+sources:
+  - name: lake
+    schema: default
+    tables:
+      - name: orders_clean
+      - name: order_payments_enriched
