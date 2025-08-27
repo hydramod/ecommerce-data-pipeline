@@ -1,0 +1,17 @@
+name: analytics_dbt
+version: 1.0.0
+config-version: 2
+profile: trino_profile
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+
+models:
+  analytics_dbt:
+    +materialized: view
+
+on-run-start:
+  # Register Delta tables in Trino so we can query by name
+  - "CALL delta.system.register_table(schema_name => 'default', table_name => 'bronze_orders', table_location => 'file:/lake/bronze/orders')"
+  - "CALL delta.system.register_table(schema_name => 'default', table_name => 'bronze_payments', table_location => 'file:/lake/bronze/payments')"
+  - "CALL delta.system.register_table(schema_name => 'default', table_name => 'silver_order_payments_enriched', table_location => 'file:/lake/silver/order_payments_enriched')"
