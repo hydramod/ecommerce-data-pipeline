@@ -39,3 +39,15 @@ scrape_configs:
 
   - job_name: 'kafka'
     static_configs: [{ targets: ['kafka-exporter:9308'] }]
+
+  - job_name: 'spark'
+    static_configs: [{ targets: ['spark-master:8080'] }]
+    metrics_path: /metrics
+
+  - job_name: 'trino'
+    static_configs: [{ targets: ['trino:8080'] }]
+    metrics_path: /metrics
+
+  - job_name: 'airflow'
+    static_configs: [{ targets: ['airflow:8080'] }]
+    metrics_path: /admin/metrics

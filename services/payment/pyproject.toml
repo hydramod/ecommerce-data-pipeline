@@ -12,7 +12,9 @@ dependencies = [
     "uvicorn==0.35.0",
     "pydantic==2.11.7",
     "kafka-python==2.2.15",
+    "PyJWT==2.10.1",
     "prometheus-fastapi-instrumentator==7.1.0",
+    "tenacity==9.1.2",
 ]
 
 [project.optional-dependencies]

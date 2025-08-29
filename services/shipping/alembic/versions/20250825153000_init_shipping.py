@@ -21,8 +21,8 @@ def upgrade() -> None:
         sa.Column("carrier", sa.String(length=64), nullable=True),
         sa.Column("tracking_number", sa.String(length=64), nullable=True),
         sa.Column("status", sa.Enum("PENDING_PAYMENT","READY_TO_SHIP","DISPATCHED","DELIVERED","CANCELLED", name="shipmentstatus"), nullable=False),
-        sa.Column("created_at", sa.DateTime(), server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(), server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(), server_default=sa.text("(now() at time zone 'utc')")),
+        sa.Column("updated_at", sa.DateTime(), server_default=sa.text("(now() at time zone 'utc')")),
     )
 
 def downgrade() -> None:

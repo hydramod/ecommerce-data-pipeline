@@ -1,3 +1,4 @@
+# File: catalog/app/main.py
 from fastapi import FastAPI
 from app.version import VERSION
 from app.api import products, categories
@@ -13,7 +14,7 @@ app = FastAPI(title='Catalog Service', version=VERSION)
 instrumentator.instrument(app).expose(
     app,
     include_in_schema=False,
-    endpoint="/catalog/metrics",  # Fixed: removed undefined SERVICE_PREFIX variable
+    endpoint="/catalog/metrics",
     should_gzip=True,
 )
 

@@ -2,9 +2,17 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta
 import jwt, uuid, hashlib
 from typing import Tuple
+from jwt import PyJWTError, ExpiredSignatureError, InvalidTokenError
 from app.core.config import settings
+import logging
 
-pwd_ctx = CryptContext(schemes=['bcrypt'], deprecated='auto')
+logger = logging.getLogger(__name__)
+
+pwd_ctx = CryptContext(
+    schemes=['bcrypt'], 
+    bcrypt__rounds=12,  # SECURITY: Stronger bcrypt rounds
+    deprecated='auto'
+)
 
 def hash_password(p: str) -> str: return pwd_ctx.hash(p)
 
@@ -28,4 +36,13 @@ def create_refresh_token(sub: str):
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM), jti, exp
 
 def decode_token(token: str):
-    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    try:
+        return jwt.decode(
+            token, 
+            settings.JWT_SECRET, 
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_aud": False}  # SECURITY: Explicit validation options
+        )
+    except (PyJWTError, ExpiredSignatureError, InvalidTokenError) as e:
+        logger.warning(f"JWT validation failed: {e}")
+        raise

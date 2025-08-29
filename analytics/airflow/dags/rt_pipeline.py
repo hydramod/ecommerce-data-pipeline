@@ -12,9 +12,10 @@ with DAG(
     "rt_pipeline",
     default_args=default_args,
     start_date=datetime(2025, 8, 1),
-    schedule_interval="@hourly",  # streams are long-running; this is for restarts/health
+    schedule_interval=None,  # CHANGED: Set to None for manual triggers of long-running streams
     catchup=False,
     max_active_runs=1,
+    tags=["ecommerce", "streaming"], # ADDED: Tags for better organization
 ) as dag:
     orders_bronze = SparkSubmitOperator(
         task_id="orders_bronze_stream",
