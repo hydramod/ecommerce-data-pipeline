@@ -1,3 +1,4 @@
+# File: notifications/app/core/config.py
 from pydantic import BaseModel
 import os
 

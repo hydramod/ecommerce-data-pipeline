@@ -1,0 +1,15 @@
+version: 2
+
+ecommerce_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      host: trino  # or your trino coordinator hostname
+      port: 8080
+      user: dbt_user  # replace with your actual user
+      catalog: hive
+      schema: default
+      http_scheme: http
+      # session_properties:
+      #   query_max_total_memory: '8GB'

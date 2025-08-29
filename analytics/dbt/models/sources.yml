@@ -1,0 +1,15 @@
+# File: analytics/dbt/models/sources.yml
+version: 2
+
+sources:
+  - name: lake
+    description: "Delta Lake silver layer tables"
+    schema: default
+    tables:
+      - name: orders_clean
+        description: "Cleaned and deduplicated orders data from silver layer"
+        loaded_at_field: event_ts  # Added for potential incremental models on source
+
+      - name: order_payments_enriched
+        description: "Orders enriched with payment information, using Delta Lake MERGE for upserts"
+        loaded_at_field: processed_ts  # Added from our enhanced silver_enrich.py

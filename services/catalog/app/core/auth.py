@@ -1,7 +1,7 @@
-
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-import jwt, os
+import jwt
+from jwt import PyJWTError, ExpiredSignatureError, InvalidTokenError
 from app.core.config import settings
 
 security = HTTPBearer(auto_error=False)
@@ -10,11 +10,18 @@ def get_current_identity(creds: HTTPAuthorizationCredentials = Depends(security)
     if not creds:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        payload = jwt.decode(creds.credentials, settings.JWT_SECRET, algorithms=[os.getenv("JWT_ALGORITHM","HS256")])
-    except Exception:
+        payload = jwt.decode(
+            creds.credentials, 
+            settings.JWT_SECRET, 
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_aud": False}
+        )
+    except (PyJWTError, ExpiredSignatureError, InvalidTokenError):
         raise HTTPException(status_code=401, detail="Invalid token")
+    
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid access token")
+    
     return payload
 
 def require_admin(identity: dict = Depends(get_current_identity)):

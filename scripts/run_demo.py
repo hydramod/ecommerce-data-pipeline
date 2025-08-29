@@ -13,11 +13,13 @@ import requests
 import json
 import time
 import os
+import sys
 from typing import Dict, Any, Optional, List
 
 class DemoRunner:
     def __init__(self):
-        self.base_url = "http://localhost"
+        # Get base URL from environment or use default
+        self.base_url = os.getenv("DEMO_BASE_URL", "http://localhost")
         self.auth_url = f"{self.base_url}/auth"
         self.catalog_url = f"{self.base_url}/catalog"
         self.cart_url = f"{self.base_url}/cart"
@@ -25,7 +27,7 @@ class DemoRunner:
         self.payment_url = f"{self.base_url}/payment"
         self.shipping_url = f"{self.base_url}/shipping"
         self.notifications_url = f"{self.base_url}/notifications"
-        self.mailhog_api = "http://localhost:8025/api/v2/messages"
+        self.mailhog_api = os.getenv("MAILHOG_URL", "http://localhost:8025/api/v2/messages")
 
         # Health endpoints
         self.health_endpoints = {
@@ -38,10 +40,10 @@ class DemoRunner:
             "notifications": f"{self.notifications_url}/health",
         }
 
-        self.admin_email = "admin@example.com"
-        self.admin_pass = "P@ssw0rd!"
-        self.cust_email = "cust@example.com"
-        self.cust_pass = "P@ssw0rd!"
+        self.admin_email = os.getenv("DEMO_ADMIN_EMAIL", "admin@example.com")
+        self.admin_pass = os.getenv("DEMO_ADMIN_PASS", "P@ssw0rd!")
+        self.cust_email = os.getenv("DEMO_CUST_EMAIL", "cust@example.com")
+        self.cust_pass = os.getenv("DEMO_CUST_PASS", "P@ssw0rd!")
 
         # Internal key (Catalog reserve)
         self.internal_key = os.getenv("SVC_INTERNAL_KEY", "devkey")
@@ -74,8 +76,8 @@ class DemoRunner:
             if headers:
                 ph = headers.copy()
                 if "Authorization" in ph:
-                    tok = ph["Authorization"].replace("Bearer ", "")
-                    ph["Authorization"] = f"Bearer {self.mask_token(tok)}"
+                    tok = ph["Authorization"].replace("bearer ", "")
+                    ph["Authorization"] = f"bearer {self.mask_token(tok)}"
                 print(f"   Headers: {json.dumps(ph, indent=2)}")
             else:
                 print("   Headers: <none>")
@@ -113,12 +115,16 @@ class DemoRunner:
     # ---------- flow ----------
     def preflight_health_checks(self):
         self.show_step("Preflight: service health")
+        all_healthy = True
+        
         for svc, url in self.health_endpoints.items():
             result = self.call_api("GET", url, expected_status=[200], quiet=True)
             ok = result.get("status") == 200
             color = "\033[92m" if ok else "\033[91m"
             status = "OK" if ok else f"FAIL ({result.get('status')})"
             print(f"  - {svc.ljust(14)} -> {color}{status}\033[0m")
+            if not ok:
+                all_healthy = False
 
         # Optional: MailHog
         try:
@@ -128,13 +134,20 @@ class DemoRunner:
             mh_ok = False
         color = "\033[92m" if mh_ok else "\033[93m"
         print(f"  - {'mailhog'.ljust(14)} -> {color}{'OK' if mh_ok else 'SKIP'}\033[0m")
+        
+        return all_healthy
 
     def run_demo(self):
         print("Starting E-commerce Microservices Demo")
         print("=" * 50)
 
         # Preflight
-        self.preflight_health_checks()
+        if not self.preflight_health_checks():
+            print("\n\033[91mSome services are not healthy. Demo may fail.\033[0m")
+            response = input("Continue anyway? (y/N): ")
+            if response.lower() != 'y':
+                print("Demo aborted.")
+                return
 
         # 1) Admin register + login
         self.show_step("Admin: register")
@@ -154,7 +167,7 @@ class DemoRunner:
             print(f"Admin access token: {self.mask_token(self.admin_access_token)}")
 
         # 2) Admin creates category + product
-        admin_hdrs = {"Authorization": f"Bearer {self.admin_access_token}"} if self.admin_access_token else {}
+        admin_hdrs = {"Authorization": f"bearer {self.admin_access_token}"} if self.admin_access_token else {}
 
         self.show_step("Admin: create category")
         self.call_api(
@@ -215,7 +228,7 @@ class DemoRunner:
             print(f"Customer access token: {self.mask_token(self.cust_access_token)}")
 
         # 5) Add to cart
-        cust_hdrs = {"Authorization": f"Bearer {self.cust_access_token}"} if self.cust_access_token else {}
+        cust_hdrs = {"Authorization": f"bearer {self.cust_access_token}"} if self.cust_access_token else {}
 
         self.show_step("Customer: add to cart")
         cart_res = self.call_api(
@@ -254,9 +267,12 @@ class DemoRunner:
         # 7) Payment mock succeed
         self.show_step("Payment: mock succeed")
         if order_id and amount:
+            # USE THE CUSTOMER'S AUTH TOKEN THAT WE ALREADY HAVE
+            payment_headers = {"Authorization": f"bearer {self.cust_access_token}"}
             self.call_api(
                 "POST",
                 f"{self.payment_url}/v1/payments/mock-succeed",
+                headers=payment_headers,  # Add customer authentication
                 data={"order_id": order_id, "amount_cents": amount, "currency": "USD"},
             )
         else:
@@ -274,15 +290,32 @@ class DemoRunner:
                 expected_status=[200],
                 quiet=True,
             )
+            
+            # Handle different response structures
             rows = q.get("data") or []
-            if rows:
-                shipment_id = rows[0]["id"]
-                status = rows[0]["status"]
-                print(f"  - Shipment {shipment_id} status: {status}")
-                if status == "READY_TO_SHIP":
-                    break
+            if rows and len(rows) > 0:
+                # Check if it's a list of shipments
+                if isinstance(rows, list):
+                    shipment = rows[0]
+                    shipment_id = shipment.get("id")
+                    status = shipment.get("status")
+                elif isinstance(rows, dict):
+                    # Single object response
+                    shipment_id = rows.get("id")
+                    status = rows.get("status")
+                
+                if shipment_id and status:
+                    print(f"  - Shipment {shipment_id} status: {status}")
+                    if status == "READY_TO_SHIP":
+                        break
+            else:
+                print(f"  - No shipments found yet for order {order_id}")
+                
         if not shipment_id:
             print("\033[93mNo shipment found for order; check Shipping logs.\033[0m")
+            # Debug: print the actual response
+            if q and q.get('data'):
+                print(f"Shipping response: {q.get('data')}")
 
         # 9) Dispatch once ready
         self.show_step("Shipping: dispatch")
@@ -349,4 +382,11 @@ class DemoRunner:
 
 
 if __name__ == "__main__":
+    # Check if requests is installed
+    try:
+        import requests
+    except ImportError:
+        print("Error: requests module is required. Install it with: pip install requests")
+        sys.exit(1)
+        
     DemoRunner().run_demo()

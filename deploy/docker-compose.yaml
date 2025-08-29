@@ -8,7 +8,7 @@ services:
     ports: ["80:80","8080:8080"]
     depends_on: [auth, catalog, cart, order, payment, shipping, notifications]
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock"
     networks: [mesh]
 
   postgres:
@@ -18,11 +18,23 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-appdb}
     ports: ["5432:5432"]
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [mesh]
 
   redis:
     image: redis:7
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks: [mesh]
 
   zookeeper:
@@ -40,21 +52,25 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports: ["9092:9092"]
     depends_on: [zookeeper]
-    networks: [mesh]
     healthcheck:
-      test: ["CMD", "bash", "-c", "echo 'dump' | nc localhost 9092 | grep -q Broker"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
       retries: 10
-      start_period: 30s
+    networks: [mesh]
 
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-admin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-adminadmin}
     ports: ["9000:9000","9001:9001"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [mesh]
 
   mailhog:
@@ -65,7 +81,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     volumes:
-      - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
     depends_on:
@@ -94,7 +110,7 @@ services:
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     environment:
-      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-appdb}?sslmode=disable"
+      DATA_SOURCE_NAME: ${POSTGRES_EXPORTER_CONNSTRING:-postgresql://postgres:postgres@postgres:5432/appdb?sslmode=disable}
     ports: ["9187:9187"]
     depends_on: [postgres]
     networks: [mesh]
@@ -123,6 +139,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN}
     labels:
       - "traefik.http.routers.auth.rule=PathPrefix(`/auth`) || PathPrefix(`/users`)"
+      - traefik.http.routers.auth.entrypoints=web
       - "traefik.http.services.auth.loadbalancer.server.port=8000"
     depends_on: [postgres]
     networks: [mesh]
@@ -137,11 +154,15 @@ services:
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-media}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
+      - traefik.http.routers.catalog.entrypoints=web
       - "traefik.http.services.catalog.loadbalancer.server.port=8000"
-    depends_on: [postgres, minio]
+    depends_on: 
+      - postgres
+      - minio
     networks: [mesh]
 
   cart:
@@ -151,11 +172,14 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       REDIS_URL: ${REDIS_URL}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
-      CATALOG_BASE: http://catalog:8000
+      CATALOG_BASE: ${CATALOG_BASE:-http://catalog:8000}
     labels:
       - "traefik.http.routers.cart.rule=PathPrefix(`/cart`)"
+      - traefik.http.routers.cart.entrypoints=web
       - "traefik.http.services.cart.loadbalancer.server.port=8000"
-    depends_on: [redis, catalog]
+    depends_on: 
+      - redis
+      - catalog
     networks: [mesh]
 
   order:
@@ -165,12 +189,16 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_ANALYTICS_TOPIC_ORDERS: ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
       SHIPPING_BASE: http://shipping:8000
     labels:
       - "traefik.http.routers.order.rule=PathPrefix(`/order`)"
+      - traefik.http.routers.order.entrypoints=web
       - "traefik.http.services.order.loadbalancer.server.port=8000"
-    depends_on: [postgres, kafka]
+    depends_on: 
+      - postgres
+      - kafka
     networks: [mesh]
 
   payment:
@@ -180,12 +208,17 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
+      KAFKA_ANALYTICS_TOPIC_PAYMENTS: ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1}
       REDIS_URL: ${REDIS_URL}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.payment.rule=PathPrefix(`/payment`)"
+      - traefik.http.routers.payment.entrypoints=web
       - "traefik.http.services.payment.loadbalancer.server.port=8000"
-    depends_on: [postgres, kafka, redis]
+    depends_on: 
+      - postgres
+      - kafka
+      - redis
     networks: [mesh]
 
   shipping:
@@ -199,8 +232,11 @@ services:
       TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
     labels:
       - "traefik.http.routers.shipping.rule=PathPrefix(`/shipping`)"
+      - traefik.http.routers.shipping.entrypoints=web
       - "traefik.http.services.shipping.loadbalancer.server.port=8000"
-    depends_on: [postgres, kafka]
+    depends_on: 
+      - postgres
+      - kafka
     networks: [mesh]
 
   notifications:
@@ -216,9 +252,170 @@ services:
       TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
     labels:
       - "traefik.http.routers.notifications.rule=PathPrefix(`/notifications`)"
+      - traefik.http.routers.notifications.entrypoints=web
       - "traefik.http.services.notifications.loadbalancer.server.port=8000"
-    depends_on: [kafka, mailhog]
+    depends_on: 
+      - kafka
+      - mailhog
+    networks: [mesh]
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP}
+    ports: ["8085:8080"]
+    depends_on: [kafka]
+    networks: [mesh]
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on: [kafka]
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      cub kafka-ready -b ${KAFKA_BOOTSTRAP} 1 60 &&
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
+        --topic ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}   --partitions 6 --replication-factor 1 &&
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
+        --topic ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1} --partitions 6 --replication-factor 1
+      "
+    networks: [mesh]
+
+  hive-metastore:
+    image: apache/hive:standalone-metastore-4.1.0
+    user: "0:0"
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      set -euo pipefail;
+      curl -fSL -o /tmp/postgresql-42.7.7.jar https://jdbc.postgresql.org/download/postgresql-42.7.7.jar;
+      export HADOOP_CLASSPATH=/tmp/postgresql-42.7.7.jar;
+      /opt/hive/bin/schematool -dbType postgres -initOrUpgradeSchema -verbose || true;
+      exec /opt/hive/bin/start-metastore
+      "
+    environment:
+      HIVE_HOME: /opt/hive
+      HIVE_CONF_DIR: /opt/hive/conf
+    volumes:
+      - ../analytics/hive/conf/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+    depends_on: [postgres, minio]
+    ports: ["9083:9083"]
+    networks: [mesh]
+
+  spark-master:
+    image: bitnami/spark:3.5
+    environment:
+      SPARK_MODE: master
+      SPARK_NO_DAEMONIZE: "yes"
+      SPARK_SQL_EXTENSIONS: io.delta.sql.DeltaSparkSessionExtension
+      SPARK_SQL_CATALOG: org.apache.spark.sql.delta.catalog.DeltaCatalog
+      SPARK_PUBLIC_DNS: spark-master
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: us-east-1
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      FS_DEFAULTFS: ${LAKEHOUSE_URI:-s3a://delta-lake}
+      FS_S3A_ENDPOINT: ${S3_ENDPOINT}
+      FS_S3A_ACCESS_KEY: ${S3_ACCESS_KEY}
+      FS_S3A_SECRET_KEY: ${S3_SECRET_KEY}
+      FS_S3A_PATH_STYLE_ACCESS: ${S3A_PATH_STYLE_ACCESS:-true}
+    volumes:
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+      - ../analytics/spark/jobs:/opt/jobs
+    ports: ["7077:7077","8081:8080"]
+    depends_on: 
+      - hive-metastore
+      - kafka
+      - kafka-init
+    networks: [mesh]
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+      SPARK_NO_DAEMONIZE: "yes"
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: us-east-1
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      FS_DEFAULTFS: ${LAKEHOUSE_URI:-s3a://delta-lake}
+      FS_S3A_ENDPOINT: ${S3_ENDPOINT}
+      FS_S3A_ACCESS_KEY: ${S3_ACCESS_KEY}
+      FS_S3A_SECRET_KEY: ${S3_SECRET_KEY}
+      FS_S3A_PATH_STYLE_ACCESS: ${S3A_PATH_STYLE_ACCESS:-true}
+    volumes:
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+      - ../analytics/spark/jobs:/opt/jobs
+    depends_on: 
+      - spark-master
+    networks: [mesh]
+
+  airflow:
+    image: apache/airflow:3.0.6rc2-python3.11
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    user: "0:0"
+    command: >
+      bash -eux -c '
+        until airflow db check; do sleep 2; done
+        airflow db migrate
+        airflow users create --role Admin \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" \
+          --firstname a --lastname b --email a@b.c || true
+        airflow webserver -p 8080 &
+        exec airflow scheduler
+      '
+    volumes:
+      - ../analytics/airflow/dags:/opt/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+    ports: ["8082:8080"]
+    depends_on:
+      - postgres
+      - spark-master
+    networks: [mesh]
+
+  trino:
+    image: trinodb/trino:443
+    ports: ["${TRINO_HTTP_PORT:-8090}:8080"]
+    environment:
+      TRINO_CATALOG: ${TRINO_CATALOG:-delta}
+      TRINO_SCHEMA: ${TRINO_SCHEMA:-default}
+    volumes:
+      - ../analytics/trino:/etc/trino
+    depends_on: 
+      - hive-metastore
+    networks: [mesh]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  metabase:
+    image: metabase/metabase:latest
+    ports: ["3001:3000"]
+    environment:
+      MB_DB_FILE: /metabase.db
+    depends_on: 
+      - trino
     networks: [mesh]
 
 networks:
   mesh: {}
+
+volumes:
+  lake: {}
