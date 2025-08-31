@@ -7,7 +7,7 @@ Mock payment processor for the e-commerce stack. Exposes simple endpoints to cre
 ## Responsibilities
 
 * **Create payment intents** (mock) — returns a fake `payment_id` and `client_secret`.&#x20;
-* **Emit payment events** — publishes `payment.succeeded` to Kafka topic `payment.events`.
+* **Emit payment events** — publishes `payment.succeeded` to Kafka topic `payments.events`.
 
 No database is used by this service.
 
@@ -72,7 +72,7 @@ Returns deterministic mock values (`pay_<order_id>`, `secret_<order_id>`). No ex
 
 **Behavior**
 
-* Publishes to Kafka topic `payment.events` with payload:
+* Publishes to Kafka topic `payments.events` with payload:
 
   ```json
   {
@@ -89,7 +89,7 @@ Returns deterministic mock values (`pay_<order_id>`, `secret_<order_id>`). No ex
 
 ## Events
 
-* **Topic**: `payment.events`
+* **Topic**: `payments.events`
 * **Producer**: `KafkaProducer` (JSON value serializer, string key serializer), configured from `KAFKA_BOOTSTRAP`. Messages are flushed after send.&#x20;
 
 ---

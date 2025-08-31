@@ -1,8 +1,10 @@
+#services\payment\app\core\config.py
 from pydantic import BaseModel
 import os
 
 class Settings(BaseModel):
     KAFKA_BOOTSTRAP: str = os.getenv("KAFKA_BOOTSTRAP", "kafka:9092")
+    TOPIC_PAYMENT_EVENTS: str = os.getenv("TOPIC_PAYMENT_EVENTS", "payments.events")
     # Missing payment-specific security settings
     JWT_SECRET: str = os.getenv("JWT_SECRET") or ''
     SVC_INTERNAL_KEY: str = os.getenv("SVC_INTERNAL_KEY") or ''

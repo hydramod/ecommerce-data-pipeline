@@ -63,7 +63,7 @@ sequenceDiagram
 
   C->>GW: POST /payment/v1/payments/mock-succeed
   GW->>PAY: mock succeed
-  PAY->>K: payment.events {type: payment.succeeded, order_id, amount}
+  PAY->>K: payments.events {type: payment.succeeded, order_id, amount}
 
   K->>ORD: consume payment.succeeded -> set order.status=PAID
   K->>SHIP: consume payment.succeeded -> set shipment.status=READY_TO_SHIP
@@ -86,8 +86,8 @@ sequenceDiagram
 
 ## Topics & Keys
 
-* `order.events` — produced by Order (e.g., `order.created`).
-* `payment.events` — produced by Payment (e.g., `payment.succeeded`).
+* `orders.events` — produced by Order (e.g., `order.created`).
+* `payments.events` — produced by Payment (e.g., `payment.succeeded`).
 * `shipping.events` — produced by Shipping (e.g., `shipping.ready`, `shipping.dispatched`).
 
 **Partition key**: `order_id` (string).

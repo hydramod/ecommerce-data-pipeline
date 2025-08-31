@@ -21,7 +21,7 @@ Consumes domain events from Kafka and sends transactional emails (via SMTP/MailH
 
 ## What it does
 
-* Subscribes to three topics: `order.events`, `payment.events`, `shipping.events`.&#x20;
+* Subscribes to three topics: `orders.events`, `payments.events`, `shipping.events`.&#x20;
 * On startup, a background thread starts the Kafka consumer and processes messages continuously.&#x20;
 * Sends plaintext emails using SMTP; defaults target to the local MailHog container.
 
@@ -60,8 +60,8 @@ Environment variables (defaults shown):&#x20;
 
 ```env
 KAFKA_BOOTSTRAP=kafka:9092
-TOPIC_ORDER_EVENTS=order.events
-TOPIC_PAYMENT_EVENTS=payment.events
+TOPIC_ORDER_EVENTS=orders.events
+TOPIC_PAYMENT_EVENTS=payments.events
 TOPIC_SHIPPING_EVENTS=shipping.events
 
 SMTP_HOST=mailhog
@@ -117,10 +117,10 @@ This will still try to connect to Kafka and SMTP per your env; for isolated loca
 ## Expected event payloads (examples)
 
 ```json
-// order.events
+// orders.events
 { "type":"order.created","order_id":123,"user_email":"cust@example.com","amount_cents":25998 }
 
-// payment.events
+// payments.events
 { "type":"payment.succeeded","order_id":123,"user_email":"cust@example.com" }
 
 // shipping.events (ready)

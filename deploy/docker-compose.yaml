@@ -38,22 +38,24 @@ services:
     networks: [mesh]
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
+    image: bitnami/zookeeper:latest
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      ALLOW_ANONYMOUS_LOGIN: "yes"
     networks: [mesh]
 
   kafka:
-    image: confluentinc/cp-kafka:7.6.0
+    image: bitnami/kafka:3.9
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_ENABLE_KRAFT: "no"    
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
     ports: ["9092:9092"]
     depends_on: [zookeeper]
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -139,7 +141,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN}
     labels:
       - "traefik.http.routers.auth.rule=PathPrefix(`/auth`) || PathPrefix(`/users`)"
-      - traefik.http.routers.auth.entrypoints=web
+      - "traefik.http.routers.auth.entrypoints=web"
       - "traefik.http.services.auth.loadbalancer.server.port=8000"
     depends_on: [postgres]
     networks: [mesh]
@@ -158,7 +160,7 @@ services:
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
-      - traefik.http.routers.catalog.entrypoints=web
+      - "traefik.http.routers.catalog.entrypoints=web"
       - "traefik.http.services.catalog.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -175,7 +177,7 @@ services:
       CATALOG_BASE: ${CATALOG_BASE:-http://catalog:8000}
     labels:
       - "traefik.http.routers.cart.rule=PathPrefix(`/cart`)"
-      - traefik.http.routers.cart.entrypoints=web
+      - "traefik.http.routers.cart.entrypoints=web"
       - "traefik.http.services.cart.loadbalancer.server.port=8000"
     depends_on: 
       - redis
@@ -189,12 +191,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      KAFKA_ANALYTICS_TOPIC_ORDERS: ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
       SHIPPING_BASE: http://shipping:8000
     labels:
       - "traefik.http.routers.order.rule=PathPrefix(`/order`)"
-      - traefik.http.routers.order.entrypoints=web
+      - "traefik.http.routers.order.entrypoints=web"
       - "traefik.http.services.order.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -208,12 +210,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      KAFKA_ANALYTICS_TOPIC_PAYMENTS: ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
       REDIS_URL: ${REDIS_URL}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.payment.rule=PathPrefix(`/payment`)"
-      - traefik.http.routers.payment.entrypoints=web
+      - "traefik.http.routers.payment.entrypoints=web"
       - "traefik.http.services.payment.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -227,12 +229,14 @@ services:
     environment:
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-order.events}
-      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payment.events}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
       TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
+      JWT_SECRET: ${JWT_SECRET}
+      SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.shipping.rule=PathPrefix(`/shipping`)"
-      - traefik.http.routers.shipping.entrypoints=web
+      - "traefik.http.routers.shipping.entrypoints=web"
       - "traefik.http.services.shipping.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -247,12 +251,12 @@ services:
       SMTP_HOST: ${SMTP_HOST:-mailhog}
       SMTP_PORT: ${SMTP_PORT:-1025}
       FROM_EMAIL: ${FROM_EMAIL:-no-reply@example.local}
-      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-order.events}
-      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payment.events}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
       TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
     labels:
       - "traefik.http.routers.notifications.rule=PathPrefix(`/notifications`)"
-      - traefik.http.routers.notifications.entrypoints=web
+      - "traefik.http.routers.notifications.entrypoints=web"
       - "traefik.http.services.notifications.loadbalancer.server.port=8000"
     depends_on: 
       - kafka
@@ -264,22 +268,18 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP}
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181  # Optional, for better Zookeeper integration
     ports: ["8085:8080"]
-    depends_on: [kafka]
+    depends_on: [kafka, zookeeper]
     networks: [mesh]
 
   kafka-init:
-    image: confluentinc/cp-kafka:7.6.0
+    image: bitnami/kafka:latest
     depends_on: [kafka]
-    entrypoint: ["/bin/bash","-lc"]
+    entrypoint: ["/bin/bash", "-c"]
     command: >
-      "
-      cub kafka-ready -b ${KAFKA_BOOTSTRAP} 1 60 &&
-      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
-        --topic ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}   --partitions 6 --replication-factor 1 &&
-      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
-        --topic ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1} --partitions 6 --replication-factor 1
-      "
+      /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server $${KAFKA_BOOTSTRAP} --create --if-not-exists --topic $${TOPIC_ORDER_EVENTS:-orders.events} --partitions 6 --replication-factor 1 &&
+      /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server $${KAFKA_BOOTSTRAP} --create --if-not-exists --topic $${TOPIC_PAYMENT_EVENTS:-payments.events} --partitions 6 --replication-factor 1
     networks: [mesh]
 
   hive-metastore:
@@ -359,35 +359,106 @@ services:
       - spark-master
     networks: [mesh]
 
-  airflow:
-    image: apache/airflow:3.0.6rc2-python3.11
-    environment:
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+  airflow-init:
+    #build: ../analytics/airflow
+    image: ecom-airflow:latest
     user: "0:0"
-    command: >
-      bash -eux -c '
-        until airflow db check; do sleep 2; done
-        airflow db migrate
-        airflow users create --role Admin \
-          --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" \
-          --firstname a --lastname b --email a@b.c || true
-        airflow webserver -p 8080 &
-        exec airflow scheduler
-      '
-    volumes:
-      - ../analytics/airflow/dags:/opt/airflow/dags
-      - ../analytics/spark/jobs:/opt/jobs
-    ports: ["8082:8080"]
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+      AIRFLOW_EMAIL: admin@example.com
+      AIRFLOW_FIRSTNAME: Admin
+      AIRFLOW_LASTNAME: User
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      AIRFLOW_WAIT_FOR_DATABASE: "yes"
+    command: ["/opt/bitnami/airflow/venv/bin/airflow", "db", "migrate"]
     depends_on:
       - postgres
-      - spark-master
     networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+
+  airflow-webserver:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      AIRFLOW__API__HOST: 0.0.0.0
+      AIRFLOW__API__PORT: "8080"
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8082
+    command: ["airflow", "api-server"]
+    ports: ["8082:8080"]
+    depends_on:
+      - airflow-init
+      - postgres
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  airflow-scheduler:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    command: ["airflow", "scheduler"]
+    depends_on:
+      - airflow-init
+      - postgres
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+  
+  airflow-triggerer:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    command: ["airflow", "triggerer"]
+    depends_on:
+      - airflow-init
+      - postgres
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+
+  airflow-dag-processor:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    command: ["airflow", "dag-processor"]
+    depends_on:
+      - airflow-init
+      - postgres
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
 
   trino:
     image: trinodb/trino:443

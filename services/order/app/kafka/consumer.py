@@ -1,11 +1,11 @@
+# services/order/app/kafka/consumer.py
 import threading
-import time
 import json
 import logging
 from kafka import KafkaConsumer
 from sqlalchemy.orm import Session
 from app.core.config import settings
-from app.db.session import SessionLocal  # Import SessionLocal directly
+from app.db.session import SessionLocal
 from app.db.models import Order
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -14,49 +14,58 @@ logger = logging.getLogger(__name__)
 _stop_event = threading.Event()
 _thread = None
 
+def _event_type(ev: dict, headers) -> str:
+    et = (ev or {}).get("event_type") or (ev or {}).get("type")
+    if et:
+        return str(et)
+    # look in headers if present
+    if headers:
+        try:
+            for k, v in headers:
+                if k == "event_type":
+                    return v.decode("utf-8") if isinstance(v, (bytes, bytearray)) else str(v)
+        except Exception:
+            pass
+    return ""
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def call_catalog_commit(items, db):
+def call_catalog_commit(items, db: Session):
     """Call catalog service to commit inventory with retry logic"""
     if not settings.SVC_INTERNAL_KEY:
         logger.error("SVC_INTERNAL_KEY not configured, cannot commit inventory")
         raise Exception("Service configuration incomplete")
-        
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(
-                f"{settings.CATALOG_BASE}/catalog/v1/inventory/commit", 
-                json={"items": items}, 
-                headers={"X-Internal-Key": settings.SVC_INTERNAL_KEY}
-            )
-            if resp.status_code != 200:
-                logger.error(f"Failed to commit inventory: {resp.text}")
-                raise Exception(f"Catalog commit failed: {resp.text}")
-            return True
-    except httpx.RequestError as e:
-        logger.error(f"Catalog service unavailable: {e}")
-        raise
 
-def process_event(ev: dict):
-    # Create a new database session for this event
+    with httpx.Client(timeout=5.0) as client:
+        resp = client.post(
+            f"{settings.CATALOG_BASE}/catalog/v1/inventory/commit",
+            json={"items": items},
+            headers={"X-Internal-Key": settings.SVC_INTERNAL_KEY},
+        )
+        if resp.status_code != 200:
+            logger.error(f"Failed to commit inventory: {resp.text}")
+            raise Exception(f"Catalog commit failed: {resp.text}")
+        return True
+
+def process_event(ev: dict, headers):
     db = SessionLocal()
     try:
-        if ev.get("type") == "payment.succeeded":
+        if _event_type(ev, headers) == "payment.succeeded":
             order_id = ev.get("order_id")
             if not order_id:
                 logger.warning("Received payment.succeeded event without order_id")
                 return
-                
+
             order = db.get(Order, order_id)
             if not order:
                 logger.warning(f"Order {order_id} not found for payment.succeeded event")
                 return
-            
+
             if order.status == "PAID":
                 logger.info(f"Order {order_id} is already PAID, skipping")
                 return
-                
-            # Commit inventory in catalog
+
             items = [{"product_id": it.product_id, "qty": it.qty} for it in order.items]
+
             try:
                 call_catalog_commit(items, db)
                 order.status = "PAID"
@@ -76,7 +85,7 @@ def run_loop():
     consumer = None
     try:
         consumer = KafkaConsumer(
-            "payment.events",
+            settings.TOPIC_PAYMENT_EVENTS,  # e.g., "payments.events"
             bootstrap_servers=[settings.KAFKA_BOOTSTRAP],
             group_id="order-service",
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
@@ -85,20 +94,18 @@ def run_loop():
             session_timeout_ms=30000,
             heartbeat_interval_ms=10000,
         )
-        
+
         logger.info("Payment events consumer started successfully")
-        
-        while not _stop_event.is_set():
-            for msg in consumer:
-                if _stop_event.is_set():
-                    break
-                    
-                try:
-                    ev = msg.value
-                    process_event(ev)  # Pass the session to process_event
-                except Exception as e:
-                    logger.error(f"Error processing message: {e}")
-                    
+
+        for msg in consumer:
+            if _stop_event.is_set():
+                break
+            try:
+                ev = msg.value
+                process_event(ev, getattr(msg, "headers", None))
+            except Exception as e:
+                logger.error(f"Error processing message: {e}")
+
     except Exception as e:
         logger.error(f"Kafka consumer error: {e}")
     finally:
