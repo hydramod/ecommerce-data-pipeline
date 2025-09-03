@@ -8,6 +8,7 @@ class Settings(BaseModel):
     KAFKA_BOOTSTRAP: str = os.getenv('KAFKA_BOOTSTRAP', 'kafka:9092')
     TOPIC_ORDER_EVENTS: str  = os.getenv('TOPIC_ORDER_EVENTS', 'orders.events')
     TOPIC_PAYMENT_EVENTS: str = os.getenv('TOPIC_PAYMENT_EVENTS', 'payments.events')
+    TOPIC_SHIPPING_EVENTS: str = os.getenv("TOPIC_SHIPPING_EVENTS", "shipping.events")
     CATALOG_BASE: str = os.getenv('CATALOG_BASE', 'http://catalog:8000')
     SHIPPING_BASE: str = os.getenv('SHIPPING_BASE', 'http://shipping:8000')
     JWT_SECRET: str = os.getenv('JWT_SECRET') or ''

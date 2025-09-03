@@ -4,6 +4,7 @@ app/main.py
 app/version.py
 app/api/routes.py
 app/core/config.py
+app/core/limiting.py
 app/db/models.py
 app/db/session.py
 app/kafka/consumer.py

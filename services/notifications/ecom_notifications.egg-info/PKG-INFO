@@ -4,10 +4,22 @@ Version: 0.1.0
 Summary: E-commerce Notifications microservice
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
-Requires-Dist: fastapi==0.111.0
-Requires-Dist: uvicorn[standard]==0.30.0
-Requires-Dist: pydantic==2.7.0
-Requires-Dist: kafka-python==2.0.2
+Requires-Dist: fastapi==0.116.1
+Requires-Dist: uvicorn[standard]==0.35.0
+Requires-Dist: pydantic[email]==2.11.7
+Requires-Dist: kafka-python==2.2.15
+Requires-Dist: prometheus-fastapi-instrumentator==7.1.0
+Provides-Extra: test
+Requires-Dist: pytest; extra == "test"
+Requires-Dist: pytest-asyncio; extra == "test"
+Requires-Dist: httpx; extra == "test"
+Requires-Dist: requests; extra == "test"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
 
 # Notifications Service
 

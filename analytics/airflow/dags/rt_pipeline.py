@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.models.baseoperator import chain
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.operators.bash import BashOperator
 
 # ---------------------------------------------------------------------------
 # Common config
@@ -41,21 +42,14 @@ with DAG(
     tags=["ecommerce", "streaming", "bronze"],
 ) as bronze_dag:
 
-    orders_bronze_stream = SparkSubmitOperator(
-        task_id="orders_bronze_stream",
-        conn_id=SPARK_CONN_ID,
-        application=f"{JOBS_DIR}/bronze_orders.py",
-        # If your script needs args, add them:
-        application_args=BRONZE_APP_ARGS,
-        verbose=True,
+    payments_bronze_stream = BashOperator(
+        task_id="payments_bronze_stream",
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_payments.py"
     )
 
-    payments_bronze_stream = SparkSubmitOperator(
-        task_id="payments_bronze_stream",
-        conn_id=SPARK_CONN_ID,
-        application=f"{JOBS_DIR}/bronze_payments.py",
-        application_args=BRONZE_APP_ARGS,
-        verbose=True,
+    orders_bronze_stream = BashOperator(
+        task_id="orders_bronze_stream",
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_orders.py"
     )
 
     # No dependency between the two bronze streams; they run independently
@@ -73,7 +67,7 @@ with DAG(
     description="Periodic silver transforms and joins (orders, payments → enriched)",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2025, 8, 1),
-    schedule="*/5 * * * *",    # change to "*/2 * * * *" for a snappier demo
+    schedule="@once",    # change to "*/2 * * * *" for a snappier demo
     catchup=False,
     max_active_runs=1,
     tags=["ecommerce", "batch", "silver"],
@@ -87,6 +81,7 @@ with DAG(
         application=f"{JOBS_DIR}/silver_orders.py",
         application_args=SILVER_APP_ARGS,
         verbose=True,
+        spark_binary="/opt/spark/bin/spark-submit",
     )
 
     silver_payments = SparkSubmitOperator(
@@ -95,6 +90,7 @@ with DAG(
         application=f"{JOBS_DIR}/silver_payments.py",
         application_args=SILVER_APP_ARGS,
         verbose=True,
+        spark_binary="/opt/spark/bin/spark-submit",
     )
 
     silver_enrich = SparkSubmitOperator(
@@ -103,6 +99,7 @@ with DAG(
         application=f"{JOBS_DIR}/silver_enrich.py",
         application_args=SILVER_APP_ARGS,
         verbose=True,
+        spark_binary="/opt/spark/bin/spark-submit"
     )
 
     # Both silver tables first → then enrichment/join

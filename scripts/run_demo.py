@@ -383,11 +383,29 @@ class DemoRunner:
 
 
 if __name__ == "__main__":
+    import argparse
+
     # Check if requests is installed
     try:
-        import requests
+        import requests  # noqa: F401
     except ImportError:
         print("Error: requests module is required. Install it with: pip install requests")
         sys.exit(1)
-        
-    DemoRunner().run_demo()
+
+    parser = argparse.ArgumentParser(description="Run the e-commerce demo multiple times.")
+    parser.add_argument(
+        "count",
+        nargs="?",
+        type=int,
+        default=1,
+        help="number of times to run the demo (default: 1)",
+    )
+    args = parser.parse_args()
+
+    if args.count < 1:
+        print("Count must be >= 1")
+        sys.exit(2)
+
+    for i in range(1, args.count + 1):
+        print(f"\n\033[96m--- DEMO RUN {i}/{args.count} ---\033[0m")
+        DemoRunner().run_demo()

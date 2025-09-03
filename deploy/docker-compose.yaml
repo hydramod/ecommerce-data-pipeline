@@ -26,6 +26,17 @@ services:
       timeout: 5s
       retries: 10
     networks: [mesh]
+  
+  adminer:
+    image: adminer:4
+    container_name: adminer
+    restart: unless-stopped
+    ports:
+      - "8089:8080"          # http://localhost:8089
+    depends_on:
+      - postgres
+    networks:
+      - mesh
 
   redis:
     image: redis:7
@@ -192,6 +203,8 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
       TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
+      TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
       SHIPPING_BASE: http://shipping:8000
     labels:
@@ -275,12 +288,18 @@ services:
 
   kafka-init:
     image: bitnami/kafka:latest
-    depends_on: [kafka]
-    entrypoint: ["/bin/bash", "-c"]
-    command: >
-      /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server $${KAFKA_BOOTSTRAP} --create --if-not-exists --topic $${TOPIC_ORDER_EVENTS:-orders.events} --partitions 6 --replication-factor 1 &&
-      /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server $${KAFKA_BOOTSTRAP} --create --if-not-exists --topic $${TOPIC_PAYMENT_EVENTS:-payments.events} --partitions 6 --replication-factor 1
-    networks: [mesh]
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_ORDER_EVENTS=orders.events
+      - TOPIC_PAYMENT_EVENTS=payments.events
+      - TOPIC_SHIPPING_EVENTS=shipping.events
+    entrypoint: ["/bin/bash", "/deploy/kafka/init-topics.sh"]
+    volumes:
+      - ../deploy/kafka/init-topics.sh:/deploy/kafka/init-topics.sh
+    depends_on:
+      - kafka
+    networks:
+      - mesh
 
   hive-metastore:
     image: apache/hive:standalone-metastore-4.1.0
@@ -304,13 +323,15 @@ services:
     networks: [mesh]
 
   spark-master:
-    image: bitnami/spark:3.5
+    #build: ../analytics/spark
+    image: ecom-spark
     environment:
       SPARK_MODE: master
-      SPARK_NO_DAEMONIZE: "yes"
+      SPARK_MASTER_HOST: spark-master
+      SPARK_LOCAL_IP: spark-master 
+      SPARK_NO_DAEMONIZE: true
       SPARK_SQL_EXTENSIONS: io.delta.sql.DeltaSparkSessionExtension
       SPARK_SQL_CATALOG: org.apache.spark.sql.delta.catalog.DeltaCatalog
-      SPARK_PUBLIC_DNS: spark-master
       SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
@@ -325,6 +346,7 @@ services:
     volumes:
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/spark/logs/master:/opt/bitnami/spark/logs
     ports: ["7077:7077","8081:8080"]
     depends_on: 
       - hive-metastore
@@ -333,7 +355,7 @@ services:
     networks: [mesh]
 
   spark-worker:
-    image: bitnami/spark:3.5
+    image: ecom-spark
     labels:
       - "traefik.enable=false"
     environment:
@@ -355,6 +377,8 @@ services:
     volumes:
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/spark/logs/worker:/opt/bitnami/spark/logs
+      - ../analytics/spark/work/worker:/opt/bitnami/spark/work
     depends_on: 
       - spark-master
     networks: [mesh]
@@ -364,35 +388,79 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
+      USER: airflow
+      HADOOP_USER_NAME: airflow
+      SPARK_USER: airflow
+      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
-      AIRFLOW_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
-      AIRFLOW_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
-      AIRFLOW_EMAIL: admin@example.com
-      AIRFLOW_FIRSTNAME: Admin
-      AIRFLOW_LASTNAME: User
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # Execution API JWT secret
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      # Spark conn
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      # Misc
       AIRFLOW_WAIT_FOR_DATABASE: "yes"
-    command: ["/opt/bitnami/airflow/venv/bin/airflow", "db", "migrate"]
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     depends_on:
       - postgres
     networks: [mesh]
     volumes:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ./airflow-connections.yaml:/opt/bitnami/airflow/airflow-connections.yml:ro
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+    command:
+      - /bin/sh
+      - -lc
+      - >
+        /opt/bitnami/airflow/venv/bin/airflow db migrate &&
+        /opt/bitnami/airflow/venv/bin/airflow connections import /opt/bitnami/airflow/airflow-connections.yml
+
 
   airflow-webserver:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
+      USER: airflow
+      HADOOP_USER_NAME: airflow
+      SPARK_USER: airflow
+      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API config
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
       AIRFLOW__API__HOST: 0.0.0.0
       AIRFLOW__API__PORT: "8080"
+      # UI base URL
       AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8082
+      # SimpleAuth for UI login
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/bitnami/airflow/logs/simple_auth_manager_passwords.json"
+      # Spark conn
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      # Misc
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     command: ["airflow", "api-server"]
     ports: ["8082:8080"]
     depends_on:
@@ -402,8 +470,10 @@ services:
     volumes:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 20s
       timeout: 5s
       retries: 10
@@ -413,52 +483,117 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
+      USER: airflow
+      HADOOP_USER_NAME: airflow
+      SPARK_USER: airflow
+      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API client/server settings
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
+      # SimpleAuth (not strictly needed here, harmless)
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/bitnami/airflow/logs/simple_auth_manager_passwords.json"
+      # Spark conn (scheduler runs tasks under LocalExecutor)
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     command: ["airflow", "scheduler"]
     depends_on:
       - airflow-init
       - postgres
+      - airflow-webserver
     networks: [mesh]
     volumes:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
-  
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+
   airflow-triggerer:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
+      USER: airflow
+      HADOOP_USER_NAME: airflow
+      SPARK_USER: airflow
+      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API settings
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      # (Spark connection not needed for triggerer, but harmless if left out)
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     command: ["airflow", "triggerer"]
     depends_on:
       - airflow-init
       - postgres
+      - airflow-webserver
     networks: [mesh]
     volumes:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
 
   airflow-dag-processor:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
+      USER: airflow
+      HADOOP_USER_NAME: airflow
+      SPARK_USER: airflow
+      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API settings
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      # (Spark connection not needed for dag-processor)
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     command: ["airflow", "dag-processor"]
     depends_on:
       - airflow-init
       - postgres
+      - airflow-webserver
     networks: [mesh]
     volumes:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
 
   trino:
     image: trinodb/trino:443
