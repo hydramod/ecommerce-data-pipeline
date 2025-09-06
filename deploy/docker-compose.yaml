@@ -52,6 +52,11 @@ services:
     image: bitnami/zookeeper:latest
     environment:
       ALLOW_ANONYMOUS_LOGIN: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q 'Mode:'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
     networks: [mesh]
 
   kafka:
@@ -64,9 +69,11 @@ services:
       KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       ALLOW_PLAINTEXT_LISTENER: "yes"
     ports: ["9092:9092"]
-    depends_on: [zookeeper]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 1>/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -140,7 +147,9 @@ services:
     command:
       - "--kafka.server=kafka:9092"
     ports: ["9308:9308"]
-    depends_on: [kafka]
+    depends_on:
+      kafka:
+        condition: service_healthy
     networks: [mesh]
 
   auth:
@@ -324,7 +333,7 @@ services:
 
   spark-master:
     #build: ../analytics/spark
-    image: ecom-spark
+    image: ecom-spark:latest
     environment:
       SPARK_MODE: master
       SPARK_MASTER_HOST: spark-master
@@ -355,7 +364,7 @@ services:
     networks: [mesh]
 
   spark-worker:
-    image: ecom-spark
+    image: ecom-spark:latest
     labels:
       - "traefik.enable=false"
     environment:
@@ -388,10 +397,14 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
-      USER: airflow
-      HADOOP_USER_NAME: airflow
-      SPARK_USER: airflow
-      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
@@ -405,6 +418,7 @@ services:
       # Spark conn
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       # Misc
       AIRFLOW_WAIT_FOR_DATABASE: "yes"
       AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
@@ -431,10 +445,14 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
-      USER: airflow
-      HADOOP_USER_NAME: airflow
-      SPARK_USER: airflow
-      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
@@ -457,6 +475,7 @@ services:
       # Spark conn
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       # Misc
       AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
       AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
@@ -483,10 +502,14 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
-      USER: airflow
-      HADOOP_USER_NAME: airflow
-      SPARK_USER: airflow
-      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
@@ -506,6 +529,7 @@ services:
       # Spark conn (scheduler runs tasks under LocalExecutor)
       AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
       AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
       AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
@@ -525,10 +549,14 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
-      USER: airflow
-      HADOOP_USER_NAME: airflow
-      SPARK_USER: airflow
-      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
@@ -544,6 +572,7 @@ services:
       AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
       # (Spark connection not needed for triggerer, but harmless if left out)
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
       AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     command: ["airflow", "triggerer"]
@@ -562,10 +591,14 @@ services:
     image: ecom-airflow:latest
     user: "0:0"
     environment:
-      USER: airflow
-      HADOOP_USER_NAME: airflow
-      SPARK_USER: airflow
-      JAVA_TOOL_OPTIONS: "-Duser.name=airflow"
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
@@ -581,6 +614,7 @@ services:
       AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
       # (Spark connection not needed for dag-processor)
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
       AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     command: ["airflow", "dag-processor"]

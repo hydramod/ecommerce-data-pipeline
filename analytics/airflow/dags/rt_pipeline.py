@@ -67,7 +67,7 @@ with DAG(
     description="Periodic silver transforms and joins (orders, payments → enriched)",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2025, 8, 1),
-    schedule="@once",    # change to "*/2 * * * *" for a snappier demo
+    schedule="*/5 * * * *",    # change to "*/2 * * * *" for a snappier demo
     catchup=False,
     max_active_runs=1,
     tags=["ecommerce", "batch", "silver"],
