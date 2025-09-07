@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.models.baseoperator import chain
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.operators.bash import BashOperator
 
 # ---------------------------------------------------------------------------
@@ -44,12 +43,14 @@ with DAG(
 
     payments_bronze_stream = BashOperator(
         task_id="payments_bronze_stream",
-        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_payments.py"
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_payments.py",
+        pool="streaming"
     )
 
     orders_bronze_stream = BashOperator(
         task_id="orders_bronze_stream",
-        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_orders.py"
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_orders.py",
+        pool="streaming"
     )
 
     # No dependency between the two bronze streams; they run independently
@@ -75,31 +76,17 @@ with DAG(
 
     # If you already have these scripts, keep the paths.
     # Otherwise, point them to your actual silver job scripts.
-    silver_orders = SparkSubmitOperator(
+    silver_orders = BashOperator(
         task_id="silver_orders",
-        conn_id=SPARK_CONN_ID,
-        application=f"{JOBS_DIR}/silver_orders.py",
-        application_args=SILVER_APP_ARGS,
-        verbose=True,
-        spark_binary="/opt/spark/bin/spark-submit",
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_orders.py",
     )
-
-    silver_payments = SparkSubmitOperator(
+    silver_payments = BashOperator(
         task_id="silver_payments",
-        conn_id=SPARK_CONN_ID,
-        application=f"{JOBS_DIR}/silver_payments.py",
-        application_args=SILVER_APP_ARGS,
-        verbose=True,
-        spark_binary="/opt/spark/bin/spark-submit",
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_payments.py",
     )
-
-    silver_enrich = SparkSubmitOperator(
+    silver_enrich = BashOperator(
         task_id="silver_enrich",
-        conn_id=SPARK_CONN_ID,
-        application=f"{JOBS_DIR}/silver_enrich.py",
-        application_args=SILVER_APP_ARGS,
-        verbose=True,
-        spark_binary="/opt/spark/bin/spark-submit"
+        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_enrich.py",
     )
 
     # Both silver tables first → then enrichment/join

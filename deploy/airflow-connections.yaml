@@ -1,7 +1,9 @@
-connections:
-  - conn_id: spark_default
-    conn_type: spark
-    extra: |
-      {"extra__spark__master":"spark://spark-master:7077",
-       "extra__spark__deploy_mode":"client",
-       "extra__spark__spark_binary":"/opt/spark/bin/spark-submit"}
+spark_default:
+  conn_type: spark
+  host: spark://spark-master
+  port: 7077
+  extra: |
+    {
+      "deploy_mode": "client",
+      "spark_binary": "/opt/spark/bin/spark-submit"
+    }

@@ -85,6 +85,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-admin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-adminadmin}
+      MINIO_DEFAULT_BUCKETS: ${S3_LAKE_BUCKET:-delta-lake}
     ports: ["9000:9000","9001:9001"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -370,8 +371,8 @@ services:
     environment:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
-      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-4}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-4g}
       SPARK_NO_DAEMONIZE: "yes"
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
@@ -408,6 +409,9 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
       # Keys (canonical + optional aliases)
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
       AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
@@ -456,6 +460,9 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
       # Keys (canonical + optional aliases)
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
       AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
@@ -513,6 +520,9 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
       # Keys (canonical + optional aliases)
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
       AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
@@ -560,6 +570,9 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
       # Keys (canonical + optional aliases)
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
       AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
@@ -602,6 +615,9 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
       AIRFLOW_LOAD_EXAMPLES: "no"
       AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
       # Keys (canonical + optional aliases)
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
       AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}

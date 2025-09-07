@@ -1,4 +1,3 @@
-#analytics\airflow\dags\rt_pipeline.py
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, to_timestamp, to_date
@@ -36,30 +35,43 @@ def main():
     chk_path = f"{lakehouse}/_chk/bronze/orders"
 
     try:
-        spark = (SparkSession.builder
-                 .appName("bronze-orders")
-                 .config("spark.sql.shuffle.partitions", "4")
-                 .getOrCreate())
+        spark = (
+            SparkSession.builder
+            .appName("bronze-orders")
+            # ---- resource caps (per-app) ----
+            .config("spark.executor.cores", "1")
+            .config("spark.cores.max", "1")              # Standalone: cap total cores for this app
+            .config("spark.executor.memory", "1g")
+            .config("spark.driver.memory", "1g")
+            .config("spark.sql.shuffle.partitions", "4")
+            .getOrCreate()
+        )
         logger.info("Spark session started")
 
-        raw = (spark.readStream
-               .format("kafka")
-               .option("kafka.bootstrap.servers", kafka_bootstrap)
-               .option("subscribe", topic_orders)
-               .load())
+        raw = (
+            spark.readStream
+            .format("kafka")
+            .option("kafka.bootstrap.servers", kafka_bootstrap)
+            .option("subscribe", topic_orders)
+            .load()
+        )
 
-        parsed = (raw.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
-                    .withColumn("j", from_json(col("value"), ORDERS_SCHEMA))
-                    .select("key", "j.*")
-                    .withColumn("event_ts", to_timestamp(col("event_time")))
-                    .withColumn("event_date", to_date(col("event_ts"))))
+        parsed = (
+            raw.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)")
+               .withColumn("j", from_json(col("value"), ORDERS_SCHEMA))
+               .select("key", "j.*")
+               .withColumn("event_ts", to_timestamp(col("event_time")))
+               .withColumn("event_date", to_date(col("event_ts")))
+        )
 
-        query = (parsed.writeStream
-                 .format("delta")
-                 .option("checkpointLocation", chk_path)
-                 .partitionBy("event_date")
-                 .outputMode("append")
-                 .start(sink_path))
+        query = (
+            parsed.writeStream
+            .format("delta")
+            .option("checkpointLocation", chk_path)
+            .partitionBy("event_date")
+            .outputMode("append")
+            .start(sink_path)
+        )
 
         logger.info(f"Streaming to {sink_path} with checkpoints at {chk_path}")
         query.awaitTermination()
