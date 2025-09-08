@@ -435,7 +435,7 @@ services:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
-      - ./airflow-connections.yaml:/opt/bitnami/airflow/airflow-connections.yml:ro
+      - ../airflow/airflow-connections.yaml:/opt/bitnami/airflow/airflow-connections.yml:ro
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
     command:
       - /bin/sh
@@ -443,7 +443,6 @@ services:
       - >
         /opt/bitnami/airflow/venv/bin/airflow db migrate &&
         /opt/bitnami/airflow/venv/bin/airflow connections import /opt/bitnami/airflow/airflow-connections.yml
-
 
   airflow-webserver:
     image: ecom-airflow:latest
@@ -645,6 +644,21 @@ services:
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
 
+  trino-init:
+    image: bitnami/python:3.12.8
+    depends_on:
+      trino:
+        condition: service_started
+    networks: [mesh]
+    environment:
+      TRINO_URL: http://trino:8080
+      TRINO_USER: admin
+      LAKEHOUSE_URI: ${LAKEHOUSE_URI:-s3a://delta-lake}
+    volumes:
+      - ../deploy/trino/trino_bootstrap.py:/bootstrap/trino_bootstrap.py:ro
+    entrypoint: ["python3","/bootstrap/trino_bootstrap.py"]
+    restart: "no"
+
   trino:
     image: trinodb/trino:443
     ports: ["${TRINO_HTTP_PORT:-8090}:8080"]
@@ -653,7 +667,8 @@ services:
       TRINO_SCHEMA: ${TRINO_SCHEMA:-default}
     volumes:
       - ../analytics/trino:/etc/trino
-    depends_on: 
+      - ../analytics/trino/catalog:/etc/trino/catalog
+    depends_on:
       - hive-metastore
     networks: [mesh]
     healthcheck:
