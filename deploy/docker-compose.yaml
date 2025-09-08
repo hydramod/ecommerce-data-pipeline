@@ -26,6 +26,17 @@ services:
       timeout: 5s
       retries: 10
     networks: [mesh]
+  
+  adminer:
+    image: adminer:4
+    container_name: adminer
+    restart: unless-stopped
+    ports:
+      - "8089:8080"          # http://localhost:8089
+    depends_on:
+      - postgres
+    networks:
+      - mesh
 
   redis:
     image: redis:7
@@ -38,22 +49,31 @@ services:
     networks: [mesh]
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.0
+    image: bitnami/zookeeper:latest
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q 'Mode:'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
     networks: [mesh]
 
   kafka:
-    image: confluentinc/cp-kafka:7.6.0
+    image: bitnami/kafka:3.9
     environment:
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_ENABLE_KRAFT: "no"    
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
     ports: ["9092:9092"]
-    depends_on: [zookeeper]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list 1>/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -65,6 +85,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-admin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-adminadmin}
+      MINIO_DEFAULT_BUCKETS: ${S3_LAKE_BUCKET:-delta-lake}
     ports: ["9000:9000","9001:9001"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -127,7 +148,9 @@ services:
     command:
       - "--kafka.server=kafka:9092"
     ports: ["9308:9308"]
-    depends_on: [kafka]
+    depends_on:
+      kafka:
+        condition: service_healthy
     networks: [mesh]
 
   auth:
@@ -139,7 +162,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN}
     labels:
       - "traefik.http.routers.auth.rule=PathPrefix(`/auth`) || PathPrefix(`/users`)"
-      - traefik.http.routers.auth.entrypoints=web
+      - "traefik.http.routers.auth.entrypoints=web"
       - "traefik.http.services.auth.loadbalancer.server.port=8000"
     depends_on: [postgres]
     networks: [mesh]
@@ -158,7 +181,7 @@ services:
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
-      - traefik.http.routers.catalog.entrypoints=web
+      - "traefik.http.routers.catalog.entrypoints=web"
       - "traefik.http.services.catalog.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -175,7 +198,7 @@ services:
       CATALOG_BASE: ${CATALOG_BASE:-http://catalog:8000}
     labels:
       - "traefik.http.routers.cart.rule=PathPrefix(`/cart`)"
-      - traefik.http.routers.cart.entrypoints=web
+      - "traefik.http.routers.cart.entrypoints=web"
       - "traefik.http.services.cart.loadbalancer.server.port=8000"
     depends_on: 
       - redis
@@ -189,12 +212,14 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      KAFKA_ANALYTICS_TOPIC_ORDERS: ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
+      TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
       SHIPPING_BASE: http://shipping:8000
     labels:
       - "traefik.http.routers.order.rule=PathPrefix(`/order`)"
-      - traefik.http.routers.order.entrypoints=web
+      - "traefik.http.routers.order.entrypoints=web"
       - "traefik.http.services.order.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -208,12 +233,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      KAFKA_ANALYTICS_TOPIC_PAYMENTS: ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
       REDIS_URL: ${REDIS_URL}
       SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.payment.rule=PathPrefix(`/payment`)"
-      - traefik.http.routers.payment.entrypoints=web
+      - "traefik.http.routers.payment.entrypoints=web"
       - "traefik.http.services.payment.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -227,12 +252,14 @@ services:
     environment:
       POSTGRES_DSN: ${POSTGRES_DSN}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP}
-      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-order.events}
-      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payment.events}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
       TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
+      JWT_SECRET: ${JWT_SECRET}
+      SVC_INTERNAL_KEY: ${SVC_INTERNAL_KEY}
     labels:
       - "traefik.http.routers.shipping.rule=PathPrefix(`/shipping`)"
-      - traefik.http.routers.shipping.entrypoints=web
+      - "traefik.http.routers.shipping.entrypoints=web"
       - "traefik.http.services.shipping.loadbalancer.server.port=8000"
     depends_on: 
       - postgres
@@ -247,12 +274,12 @@ services:
       SMTP_HOST: ${SMTP_HOST:-mailhog}
       SMTP_PORT: ${SMTP_PORT:-1025}
       FROM_EMAIL: ${FROM_EMAIL:-no-reply@example.local}
-      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-order.events}
-      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payment.events}
+      TOPIC_ORDER_EVENTS: ${TOPIC_ORDER_EVENTS:-orders.events}
+      TOPIC_PAYMENT_EVENTS: ${TOPIC_PAYMENT_EVENTS:-payments.events}
       TOPIC_SHIPPING_EVENTS: ${TOPIC_SHIPPING_EVENTS:-shipping.events}
     labels:
       - "traefik.http.routers.notifications.rule=PathPrefix(`/notifications`)"
-      - traefik.http.routers.notifications.entrypoints=web
+      - "traefik.http.routers.notifications.entrypoints=web"
       - "traefik.http.services.notifications.loadbalancer.server.port=8000"
     depends_on: 
       - kafka
@@ -264,23 +291,25 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: ${KAFKA_BOOTSTRAP}
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181  # Optional, for better Zookeeper integration
     ports: ["8085:8080"]
-    depends_on: [kafka]
+    depends_on: [kafka, zookeeper]
     networks: [mesh]
 
   kafka-init:
-    image: confluentinc/cp-kafka:7.6.0
-    depends_on: [kafka]
-    entrypoint: ["/bin/bash","-lc"]
-    command: >
-      "
-      cub kafka-ready -b ${KAFKA_BOOTSTRAP} 1 60 &&
-      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
-        --topic ${KAFKA_ANALYTICS_TOPIC_ORDERS:-orders.v1}   --partitions 6 --replication-factor 1 &&
-      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP} --create --if-not-exists
-        --topic ${KAFKA_ANALYTICS_TOPIC_PAYMENTS:-payments.v1} --partitions 6 --replication-factor 1
-      "
-    networks: [mesh]
+    image: bitnami/kafka:latest
+    environment:
+      - KAFKA_BOOTSTRAP=kafka:9092
+      - TOPIC_ORDER_EVENTS=orders.events
+      - TOPIC_PAYMENT_EVENTS=payments.events
+      - TOPIC_SHIPPING_EVENTS=shipping.events
+    entrypoint: ["/bin/bash", "/deploy/kafka/init-topics.sh"]
+    volumes:
+      - ../deploy/kafka/init-topics.sh:/deploy/kafka/init-topics.sh
+    depends_on:
+      - kafka
+    networks:
+      - mesh
 
   hive-metastore:
     image: apache/hive:standalone-metastore-4.1.0
@@ -304,13 +333,15 @@ services:
     networks: [mesh]
 
   spark-master:
-    image: bitnami/spark:3.5
+    #build: ../analytics/spark
+    image: ecom-spark:latest
     environment:
       SPARK_MODE: master
-      SPARK_NO_DAEMONIZE: "yes"
+      SPARK_MASTER_HOST: spark-master
+      SPARK_LOCAL_IP: spark-master 
+      SPARK_NO_DAEMONIZE: true
       SPARK_SQL_EXTENSIONS: io.delta.sql.DeltaSparkSessionExtension
       SPARK_SQL_CATALOG: org.apache.spark.sql.delta.catalog.DeltaCatalog
-      SPARK_PUBLIC_DNS: spark-master
       SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
@@ -325,6 +356,7 @@ services:
     volumes:
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/spark/logs/master:/opt/bitnami/spark/logs
     ports: ["7077:7077","8081:8080"]
     depends_on: 
       - hive-metastore
@@ -333,14 +365,14 @@ services:
     networks: [mesh]
 
   spark-worker:
-    image: bitnami/spark:3.5
+    image: ecom-spark:latest
     labels:
       - "traefik.enable=false"
     environment:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
-      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2g}
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-4}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-4g}
       SPARK_NO_DAEMONIZE: "yes"
       SPARK_CONF_DIR: /opt/bitnami/spark/conf
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
@@ -355,39 +387,263 @@ services:
     volumes:
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
       - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/spark/logs/worker:/opt/bitnami/spark/logs
+      - ../analytics/spark/work/worker:/opt/bitnami/spark/work
     depends_on: 
       - spark-master
     networks: [mesh]
 
-  airflow:
-    image: apache/airflow:3.0.6rc2-python3.11
-    environment:
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
-      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+  airflow-init:
+    #build: ../analytics/airflow
+    image: ecom-airflow:latest
     user: "0:0"
-    command: >
-      bash -eux -c '
-        until airflow db check; do sleep 2; done
-        airflow db migrate
-        airflow users create --role Admin \
-          --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" \
-          --firstname a --lastname b --email a@b.c || true
-        airflow webserver -p 8080 &
-        exec airflow scheduler
-      '
-    volumes:
-      - ../analytics/airflow/dags:/opt/airflow/dags
-      - ../analytics/spark/jobs:/opt/jobs
-    ports: ["8082:8080"]
+    environment:
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # Execution API JWT secret
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      # Spark conn
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+      # Misc
+      AIRFLOW_WAIT_FOR_DATABASE: "yes"
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
     depends_on:
       - postgres
-      - spark-master
     networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ./airflow-connections.yaml:/opt/bitnami/airflow/airflow-connections.yml:ro
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+    command:
+      - /bin/sh
+      - -lc
+      - >
+        /opt/bitnami/airflow/venv/bin/airflow db migrate &&
+        /opt/bitnami/airflow/venv/bin/airflow connections import /opt/bitnami/airflow/airflow-connections.yml
+
+
+  airflow-webserver:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API config
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__API__HOST: 0.0.0.0
+      AIRFLOW__API__PORT: "8080"
+      # UI base URL
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8082
+      # SimpleAuth for UI login
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/bitnami/airflow/logs/simple_auth_manager_passwords.json"
+      # Spark conn
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+      # Misc
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
+    command: ["airflow", "api-server"]
+    ports: ["8082:8080"]
+    depends_on:
+      - airflow-init
+      - postgres
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  airflow-scheduler:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API client/server settings
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-webserver:8080/execution/
+      # SimpleAuth (not strictly needed here, harmless)
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/bitnami/airflow/logs/simple_auth_manager_passwords.json"
+      # Spark conn (scheduler runs tasks under LocalExecutor)
+      AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077?spark_binary=/opt/spark/bin/spark-submit&deploy-mode=client
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
+    command: ["airflow", "scheduler"]
+    depends_on:
+      - airflow-init
+      - postgres
+      - airflow-webserver
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+
+  airflow-triggerer:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API settings
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      # (Spark connection not needed for triggerer, but harmless if left out)
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
+    command: ["airflow", "triggerer"]
+    depends_on:
+      - airflow-init
+      - postgres
+      - airflow-webserver
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
+
+  airflow-dag-processor:
+    image: ecom-airflow:latest
+    user: "0:0"
+    environment:
+      NSS_WRAPPER_PASSWD: ""
+      NSS_WRAPPER_GROUP: ""
+      LD_PRELOAD: ""
+      USER: root
+      HADOOP_PROXY_USER: root
+      HADOOP_USER_NAME: root
+      SPARK_USER: root
+      JAVA_TOOL_OPTIONS: "-Duser.name=root"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
+      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: "32"
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
+      AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: "1"
+      # Keys (canonical + optional aliases)
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW_FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      AIRFLOW_APISERVER_SECRET_KEY: ${AIRFLOW__API__SECRET_KEY}
+      # API settings
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.jwt,airflow.api.auth.backend.session"
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+      AIRFLOW__API__BASE_URL: http://airflow-webserver:8080
+      AIRFLOW__CORE__STORE_SERIALIZED_DAGS: "True"
+      # (Spark connection not needed for dag-processor)
+      SPARK_CONF_DIR: /opt/bitnami/spark/conf
+      SPARK_EXTRA_CLASSPATH: /opt/bitnami/spark/jars/*
+      AIRFLOW__LOGGING__MASK_SECRETS_IN_LOGS: "False"
+      AIRFLOW__CORE__HIDE_SENSITIVE_VAR_CONN_FIELDS: "False"
+    command: ["airflow", "dag-processor"]
+    depends_on:
+      - airflow-init
+      - postgres
+      - airflow-webserver
+    networks: [mesh]
+    volumes:
+      - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
+      - ../analytics/spark/jobs:/opt/jobs
+      - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
+      - ../analytics/spark/conf:/opt/bitnami/spark/conf
 
   trino:
     image: trinodb/trino:443

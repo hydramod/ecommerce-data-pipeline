@@ -79,16 +79,16 @@ OpenAPI docs available at `/docs` when accessing the container directly (port 80
 
 ## Events (Kafka)
 
-* **Consumes**: `payment.events` — looks for `{"type":"payment.succeeded","order_id":...}` to unblock shipping. Group id: `shipping-service`.&#x20;
+* **Consumes**: `payments.events` — looks for `{"type":"payment.succeeded","order_id":...}` to unblock shipping. Group id: `shipping-service`.&#x20;
 * **Produces**: `shipping.events` — e.g., `{"type":"shipping.ready","order_id":...,"shipment_id":...}` on state change.&#x20;
 
 Topic names and Kafka bootstrap server are configurable via env vars (see below). Defaults:
 
 ````text
 KAFKA_BOOTSTRAP=kafka:9092
-TOPIC_PAYMENT_EVENTS=payment.events
+TOPIC_PAYMENT_EVENTS=payments.events
 TOPIC_SHIPPING_EVENTS=shipping.events
-TOPIC_ORDER_EVENTS=order.events
+TOPIC_ORDER_EVENTS=orders.events
 ``` :contentReference[oaicite:9]{index=9}
 
 ---
@@ -101,9 +101,9 @@ Set via environment variables:
 |-------------------------|-------------------------------------------------------------------|------------------------------------------|
 | `POSTGRES_DSN`          | `postgresql+psycopg://postgres:postgres@postgres:5432/appdb`     | Database connection string               |
 | `KAFKA_BOOTSTRAP`       | `kafka:9092`                                                      | Kafka bootstrap servers                  |
-| `TOPIC_PAYMENT_EVENTS`  | `payment.events`                                                  | Topic to consume payment events          |
+| `TOPIC_PAYMENT_EVENTS`  | `payments.events`                                                  | Topic to consume payment events          |
 | `TOPIC_SHIPPING_EVENTS` | `shipping.events`                                                 | Topic to publish shipping events         |
-| `TOPIC_ORDER_EVENTS`    | `order.events`                                                    | Reserved for future use                  | :contentReference[oaicite:10]{index=10}
+| `TOPIC_ORDER_EVENTS`    | `orders.events`                                                    | Reserved for future use                  | :contentReference[oaicite:10]{index=10}
 
 ---
 

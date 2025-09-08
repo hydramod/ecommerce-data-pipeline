@@ -81,12 +81,15 @@ def mock_succeed(
         raise HTTPException(status_code=403, detail="Forbidden")
     
     try:
-        # Emit Kafka event that order service will consume
-        send("payment.events", key=str(payload.order_id), value={
+        # Get user email from identity if available
+        user_email = identity.get("sub") if identity else ""
+        
+        send("payments.events", key=str(payload.order_id), value={
             "type": "payment.succeeded",
             "order_id": payload.order_id,
             "amount_cents": payload.amount_cents,
             "currency": payload.currency,
+            "user_email": user_email,  # Add this field
         })
         return {"status": "ok"}
     except Exception as e:

@@ -213,10 +213,10 @@ Add infra metrics by keeping these services enabled in `deploy/docker-compose.ya
 
 Kafka bootstrap: `kafka:9092` (inside Docker).
 
-* **Topic `order.events`**
+* **Topic `orders.events`**
 
   * `order.created` — Order on checkout
-* **Topic `payment.events`**
+* **Topic `payments.events`**
 
   * `payment.succeeded` — Payment mock
 * **Topic `shipping.events`**

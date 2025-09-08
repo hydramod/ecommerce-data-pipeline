@@ -1,0 +1,9 @@
+spark_default:
+  conn_type: spark
+  host: spark://spark-master
+  port: 7077
+  extra: |
+    {
+      "deploy_mode": "client",
+      "spark_binary": "/opt/spark/bin/spark-submit"
+    }

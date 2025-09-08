@@ -70,7 +70,7 @@ Base prefix: `/order` (Traefik routes this service to that prefix). Core routes 
 2. Reserve inventory in Catalog: `POST {CATALOG_BASE}/catalog/v1/inventory/reserve` with `X-Internal-Key`.
 3. Create `Order` + `OrderItem`s in DB.
 4. Create Shipment (draft, `PENDING_PAYMENT`): `POST {SHIPPING_BASE}/shipping/v1/shipments`.
-5. Emit Kafka `order.created` to `order.events`.&#x20;
+5. Emit Kafka `order.created` to `orders.events`.&#x20;
 
 **Response**:
 
@@ -93,7 +93,7 @@ Base prefix: `/order` (Traefik routes this service to that prefix). Core routes 
 
 ### Publishes
 
-* **Topic**: `order.events`
+* **Topic**: `orders.events`
   **Type**: `order.created`
   **Payload** (example):
 
@@ -111,7 +111,7 @@ Base prefix: `/order` (Traefik routes this service to that prefix). Core routes 
 
 ### Consumes
 
-* **Topic**: `payment.events`
+* **Topic**: `payments.events`
   **On** `payment.succeeded`:
 
   * POST Catalog `inventory/commit` with the order’s items (using `X-Internal-Key`)
@@ -150,7 +150,7 @@ docker compose -f deploy/docker-compose.yaml --env-file deploy/.env up -d order
 uvicorn app.main:app --reload --port 8000
 ```
 
-The app starts a Kafka consumer on startup to process `payment.events`. Health routes are printed to the logs at boot.&#x20;
+The app starts a Kafka consumer on startup to process `payments.events`. Health routes are printed to the logs at boot.&#x20;
 
 ---
 

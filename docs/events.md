@@ -4,8 +4,8 @@ This stack uses **Kafka** for async, decoupled workflows. All events are **addit
 
 ## Topics
 
-* `order.events` — order lifecycle (e.g., `order.created`)
-* `payment.events` — payment lifecycle (e.g., `payment.succeeded`)
+* `orders.events` — order lifecycle (e.g., `order.created`)
+* `payments.events` — payment lifecycle (e.g., `payment.succeeded`)
 * `shipping.events` — shipping lifecycle (e.g., `shipping.ready`, `shipping.dispatched`)
 
 **Partition key**: `order_id` (as string) to co-locate related messages.
@@ -36,7 +36,7 @@ This stack uses **Kafka** for async, decoupled workflows. All events are **addit
 
 ## Event Types
 
-### `order.events`
+### `orders.events`
 
 #### `order.created`
 
@@ -63,7 +63,7 @@ Emitted by **Order** after successful checkout and inventory reservation.
 
 ---
 
-### `payment.events`
+### `payments.events`
 
 #### `payment.succeeded`
 

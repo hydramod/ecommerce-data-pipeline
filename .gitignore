@@ -6,3 +6,6 @@ venv/
 .DS_Store
 node_modules/
 **/.pytest_cache/
+logs/
+*.log
+work/

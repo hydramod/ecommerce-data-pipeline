@@ -1,78 +1,149 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import expr, current_timestamp
-from delta.tables import DeltaTable
+#!/usr/bin/env python3
+import os
+import time
 import logging
-import sys
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, current_timestamp, row_number, coalesce
+from pyspark.sql.window import Window
+from delta.tables import DeltaTable
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("silver_enrich")
 
-def upsert_to_enriched_table(microBatchDF, batchId):
-    """
-    foreachBatch function to perform UPSERT using Delta Lake MERGE
-    """
-    logger.info(f"Processing batchId: {batchId}")
-    
-    # Create or get the target Delta table
-    target_path = "/lake/silver/order_payments_enriched"
-    if DeltaTable.isDeltaTable(spark, target_path):
-        target_delta_table = DeltaTable.forPath(spark, target_path)
-    else:
-        # First run - create the table by writing the initial data
-        microBatchDF.write.format("delta").save(target_path)
-        return
-    
-    # Merge logic - update if exists, insert if not
-    # Using order_id + event_ts as unique key (adjust based on your needs)
-    merge_condition = "target.order_id = source.order_id AND target.event_ts = source.event_ts"
-    
-    target_delta_table.alias("target").merge(
-        microBatchDF.alias("source"), 
-        merge_condition
-    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+LAKE = os.getenv("LAKEHOUSE_URI", "s3a://delta-lake")
+ORDERS_SILVER   = f"{LAKE}/silver/orders_clean"
+PAYMENTS_SILVER = f"{LAKE}/silver/payments_clean"
+TARGET          = f"{LAKE}/silver/order_payments_enriched"
+
+def spark_session():
+    return (
+        SparkSession.builder
+        .appName("silver_enrich")
+        # ---- resource caps (per-app) ----
+        .config("spark.executor.cores", "1")
+        .config("spark.cores.max", "1")
+        .config("spark.executor.memory", "1g")
+        .config("spark.driver.memory", "1g")
+        # ---- Delta / general ----
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .config("spark.sql.session.timeZone", "UTC")
+        .getOrCreate()
+    )
+
+def path_ready(spark: SparkSession, path: str) -> bool:
+    try:
+        # if it’s a Delta table with any metadata, loading doesn’t throw
+        spark.read.format("delta").load(path).limit(1).collect()
+        return True
+    except Exception:
+        return False
+
+def wait_for_delta(spark, path, timeout=600, poll=5):
+    timeout = int(timeout or os.getenv("SILVER_WAIT_TIMEOUT_SECS", "900"))
+    logger.info(f"Waiting for Delta table at {path} (timeout={timeout}s)...")
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if DeltaTable.isDeltaTable(spark, path):
+                logger.info(f"Delta table is ready: {path}")
+                return
+        except Exception:
+            pass
+        time.sleep(poll)
+    raise TimeoutError(f"Delta table not found at {path} after {timeout}s")
+
+def df_empty(df) -> bool:
+    return df.rdd.isEmpty()
 
 def main():
+    spark = spark_session()
+
     try:
-        global spark
-        spark = (SparkSession.builder
-                 .appName("silver-enrich")
-                 .config("spark.sql.shuffle.partitions", "4")
-                 .getOrCreate())
-        logger.info("Spark session started successfully")
+        # 1) Wait until silver inputs exist (created by your silver batch jobs)
+        wait_for_delta(spark, ORDERS_SILVER, timeout=600)
+        wait_for_delta(spark, PAYMENTS_SILVER, timeout=600)
 
-        orders = spark.readStream.format("delta").load("/lake/silver/orders_clean")
-        payments = spark.readStream.format("delta").load("/lake/silver/payments_clean")
-
-        ow = orders.withWatermark("event_ts", "30 minutes")
-        pw = payments.withWatermark("event_ts", "30 minutes")
-
-        joined = ow.join(
-            pw,
-            expr("""
-                orders_clean.order_id = payments_clean.order_id
-                AND payments_clean.event_ts BETWEEN orders_clean.event_ts - interval 1 day
-                AND orders_clean.event_ts + interval 2 days
-            """),
-            "leftOuter"
+        # 2) Load inputs (schema produced by your silver jobs)
+        orders = (
+            spark.read.format("delta").load(ORDERS_SILVER)
+            .select(
+                col("order_id").cast("string"),
+                col("user_id").alias("customer_id").cast("string"),
+                col("event_ts").cast("timestamp").alias("order_event_ts"),
+                col("total_amount").cast("double"),
+            )
         )
 
-        # Add processing timestamp for auditing
-        enriched = joined.withColumn("processed_ts", current_timestamp())
+        payments = (
+            spark.read.format("delta").load(PAYMENTS_SILVER)
+            .select(
+                col("payment_id").cast("string"),
+                col("order_id").cast("string"),
+                col("event_ts").cast("timestamp").alias("payment_event_ts"),
+                col("amount").cast("double"),
+                col("status").cast("string"),
+            )
+        )
 
-        query = (enriched.writeStream
-                 .format("delta")
-                 .option("checkpointLocation", "/lake/_chk/silver/order_payments_enriched")
-                 .foreachBatch(upsert_to_enriched_table)
-                 .outputMode("update")  # Changed to update for foreachBatch
-                 .start())
-        
-        logger.info("Stream started, awaiting termination...")
-        query.awaitTermination()
+        if df_empty(orders):
+            logger.info("orders_clean is empty; nothing to enrich. Exiting 0.")
+            spark.stop(); return
+        if df_empty(payments):
+            logger.info("payments_clean is empty; nothing to enrich. Exiting 0.")
+            spark.stop(); return
 
-    except Exception as e:
-        logger.error(f"Fatal error in Spark application: {e}", exc_info=True)
+        # 3) Enrichment: latest payment per order
+        w = Window.partitionBy("order_id").orderBy(col("payment_event_ts").desc())
+        latest_pay = (
+            payments
+            .withColumn("rn", row_number().over(w))
+            .where(col("rn") == 1)
+            .drop("rn")
+        )
+
+        enriched = (
+            orders.alias("o")
+            .join(latest_pay.alias("p"), on="order_id", how="left")
+            .select(
+                col("o.order_id"),
+                col("o.customer_id"),
+                col("o.total_amount").alias("order_total_amount"),
+                col("o.order_event_ts"),
+                col("p.payment_id"),
+                col("p.amount").alias("payment_amount"),
+                col("p.status").alias("payment_status"),
+                col("p.payment_event_ts"),
+                # single canonical event_ts for the row (prefer payment time)
+                coalesce(col("p.payment_event_ts"), col("o.order_event_ts")).alias("event_ts"),
+                current_timestamp().alias("processed_at"),
+            )
+        )
+
+        # 4) Upsert into Delta target
+        if DeltaTable.isDeltaTable(spark, TARGET):
+            tgt = DeltaTable.forPath(spark, TARGET)
+            (
+                tgt.alias("t")
+                .merge(
+                    enriched.alias("s"),
+                    # MERGE key: order_id + payment_id (null-safe)
+                    "t.order_id <=> s.order_id AND t.payment_id <=> s.payment_id"
+                )
+                .whenMatchedUpdateAll()
+                .whenNotMatchedInsertAll()
+                .execute()
+            )
+            logger.info("MERGE complete into %s", TARGET)
+        else:
+            enriched.write.format("delta").mode("overwrite").save(TARGET)
+            logger.info("Created target table at %s", TARGET)
+
+    except Exception:
+        logger.error("silver-enrich failed", exc_info=True)
         raise
+    finally:
+        spark.stop()
 
 if __name__ == "__main__":
     main()

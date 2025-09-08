@@ -264,25 +264,11 @@ class DemoRunner:
         amount = co.get("data", {}).get("total_cents") if co else None
         print(f"Order ID: {order_id}; Amount: {amount}")
 
-        # 7) Payment mock succeed
-        self.show_step("Payment: mock succeed")
-        if order_id and amount:
-            # USE THE CUSTOMER'S AUTH TOKEN THAT WE ALREADY HAVE
-            payment_headers = {"Authorization": f"bearer {self.cust_access_token}"}
-            self.call_api(
-                "POST",
-                f"{self.payment_url}/v1/payments/mock-succeed",
-                headers=payment_headers,  # Add customer authentication
-                data={"order_id": order_id, "amount_cents": amount, "currency": "USD"},
-            )
-        else:
-            print("Skipping payment - no order/amount")
-
-        # 8) Wait & poll shipping until READY_TO_SHIP
-        self.show_step("Shipping: wait for READY_TO_SHIP")
+        # 7) Shipping: wait for shipment draft (PENDING_PAYMENT)
+        self.show_step("Shipping: wait for shipment draft (PENDING_PAYMENT)")
         shipment_id = None
         status = None
-        for _ in range(20):  # up to ~10 seconds
+        for _ in range(30):  # up to ~15s
             time.sleep(0.5)
             q = self.call_api(
                 "GET",
@@ -290,43 +276,58 @@ class DemoRunner:
                 expected_status=[200],
                 quiet=True,
             )
-            
-            # Handle different response structures
-            rows = q.get("data") or []
-            if rows and len(rows) > 0:
-                # Check if it's a list of shipments
-                if isinstance(rows, list):
-                    shipment = rows[0]
-                    shipment_id = shipment.get("id")
-                    status = shipment.get("status")
-                elif isinstance(rows, dict):
-                    # Single object response
-                    shipment_id = rows.get("id")
-                    status = rows.get("status")
-                
-                if shipment_id and status:
-                    print(f"  - Shipment {shipment_id} status: {status}")
-                    if status == "READY_TO_SHIP":
-                        break
+            rows = (q or {}).get("data") or []
+            if rows:
+                shipment = rows[0] if isinstance(rows, list) else rows
+                shipment_id = shipment.get("id")
+                status = shipment.get("status")
+                print(f"  - Shipment {shipment_id} status: {status}")
+                if status in ("PENDING_PAYMENT", "READY_TO_SHIP"):
+                    break
             else:
                 print(f"  - No shipments found yet for order {order_id}")
-                
+
         if not shipment_id:
             print("\033[93mNo shipment found for order; check Shipping logs.\033[0m")
-            # Debug: print the actual response
-            if q and q.get('data'):
+            if q and q.get("data"):
                 print(f"Shipping response: {q.get('data')}")
 
-        # 9) Dispatch once ready
-        self.show_step("Shipping: dispatch")
-        if shipment_id and status == "READY_TO_SHIP":
+
+        # 8) Payment: mock succeed (after shipment exists to avoid race)
+        self.show_step("Payment: mock succeed")
+        if order_id and amount:
+            payment_headers = {"Authorization": f"bearer {self.cust_access_token}"}
             self.call_api(
                 "POST",
-                f"{self.shipping_url}/v1/shipments/{shipment_id}/dispatch",
-                expected_status=[200],
+                f"{self.payment_url}/v1/payments/mock-succeed",
+                headers=payment_headers,
+                data={"order_id": order_id, "amount_cents": amount, "currency": "USD"},
             )
         else:
-            print("Skipping dispatch - shipment not READY_TO_SHIP")
+            print("Skipping payment - no order/amount")
+
+
+       # 9) Shipping: wait for READY_TO_SHIP
+        self.show_step("Shipping: wait for READY_TO_SHIP")
+        for _ in range(30):  # up to ~15s
+            time.sleep(0.5)
+            q = self.call_api(
+                "GET",
+                f"{self.shipping_url}/v1/shipments?order_id={order_id}",
+                expected_status=[200],
+                quiet=True,
+            )
+            rows = (q or {}).get("data") or []
+            if rows:
+                shipment = rows[0] if isinstance(rows, list) else rows
+                shipment_id = shipment.get("id") or shipment_id
+                status = shipment.get("status")
+                print(f"  - Shipment {shipment_id} status: {status}")
+                if status == "READY_TO_SHIP":
+                    break
+            else:
+                print(f"  - No shipments found yet for order {order_id}")
+
 
         # 10) Check order status
         time.sleep(1)
@@ -382,11 +383,29 @@ class DemoRunner:
 
 
 if __name__ == "__main__":
+    import argparse
+
     # Check if requests is installed
     try:
-        import requests
+        import requests  # noqa: F401
     except ImportError:
         print("Error: requests module is required. Install it with: pip install requests")
         sys.exit(1)
-        
-    DemoRunner().run_demo()
+
+    parser = argparse.ArgumentParser(description="Run the e-commerce demo multiple times.")
+    parser.add_argument(
+        "count",
+        nargs="?",
+        type=int,
+        default=1,
+        help="number of times to run the demo (default: 1)",
+    )
+    args = parser.parse_args()
+
+    if args.count < 1:
+        print("Count must be >= 1")
+        sys.exit(2)
+
+    for i in range(1, args.count + 1):
+        print(f"\n\033[96m--- DEMO RUN {i}/{args.count} ---\033[0m")
+        DemoRunner().run_demo()

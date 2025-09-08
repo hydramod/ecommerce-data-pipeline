@@ -2,12 +2,24 @@ Metadata-Version: 2.4
 Name: ecom-catalog
 Version: 0.1.0
 Requires-Python: >=3.11
-Requires-Dist: fastapi>=0.115.0
-Requires-Dist: uvicorn>=0.30.0
-Requires-Dist: pydantic>=2.5.0
-Requires-Dist: sqlalchemy>=2.0.25
-Requires-Dist: alembic>=1.13.0
-Requires-Dist: psycopg[binary]>=3.1.10
-Requires-Dist: python-multipart>=0.0.9
-Requires-Dist: minio>=7.2.5
-Requires-Dist: PyJWT>=2.9.0
+Requires-Dist: fastapi==0.116.1
+Requires-Dist: uvicorn==0.35.0
+Requires-Dist: pydantic==2.11.7
+Requires-Dist: sqlalchemy==2.0.43
+Requires-Dist: alembic==1.16.4
+Requires-Dist: psycopg[binary]==3.2.9
+Requires-Dist: python-multipart==0.0.20
+Requires-Dist: minio==7.2.16
+Requires-Dist: PyJWT==2.10.1
+Requires-Dist: prometheus-fastapi-instrumentator==7.1.0
+Provides-Extra: test
+Requires-Dist: pytest; extra == "test"
+Requires-Dist: pytest-asyncio; extra == "test"
+Requires-Dist: httpx; extra == "test"
+Requires-Dist: requests; extra == "test"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
