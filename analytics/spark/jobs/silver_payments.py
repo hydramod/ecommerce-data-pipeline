@@ -1,80 +1,49 @@
+#!/usr/bin/env python3
 import os
-import logging
-import time
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
-from delta.tables import DeltaTable
+from pyspark.sql import SparkSession, functions as F
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+LAKE = os.getenv("LAKEHOUSE_URI", "s3a://delta-lake")
+DB   = "silver"
 
-def spark_session():
+def spark_session(app="silver_jobs"):
     return (
         SparkSession.builder
-        .appName("silver-payments")
+        .appName(app)
+        .enableHiveSupport()
         # ---- resource caps (per-app) ----
-        .config("spark.executor.cores", "1")
-        .config("spark.cores.max", "1")
+        .config("spark.executor.cores", "1")   # 1 core per executor
+        .config("spark.cores.max", "1")        # 1 core total for the app
+        .config("spark.executor.instances", "1")  # (belt & braces) single executor
         .config("spark.executor.memory", "1g")
         .config("spark.driver.memory", "1g")
-        # ---- general ----
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.shuffle.partitions", os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "4"))
+        .config("spark.sql.shuffle.partitions", "4")
         .getOrCreate()
     )
 
-def wait_for_delta(spark, path, timeout=None, poll=5):
-    """Wait until `path` is an initialized Delta table (has at least one commit)."""
-    timeout = int(timeout or os.getenv("SILVER_WAIT_TIMEOUT_SECS", "900"))
-    logger.info(f"Waiting for Delta table at {path} (timeout={timeout}s)…")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            if DeltaTable.isDeltaTable(spark, path):
-                logger.info(f"Delta table is ready: {path}")
-                return
-        except Exception:
-            pass
-        time.sleep(poll)
-    raise TimeoutError(f"Delta table not found at {path} after {timeout}s")
-
 def main():
-    try:
-        lakehouse = os.getenv("LAKEHOUSE_URI", "s3a://delta-lake")
-        bronze_payments = f"{lakehouse}/bronze/payments"
-        ckpt = f"{lakehouse}/_chk/silver/payments_clean"
-        out  = f"{lakehouse}/silver/payments_clean"
+    spark = spark_session("silver_payments")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {DB}")
+    spark.sql(f"ALTER DATABASE {DB} SET LOCATION 's3a://delta-lake/warehouse/{DB}.db'")
 
-        spark = spark_session()
-        logger.info("Spark session started")
+    payments_src = f"{LAKE}/bronze/payments"
+    df = spark.read.format("delta").load(payments_src)
 
-        wait_for_delta(spark, bronze_payments)
-        src = spark.readStream.format("delta").load(bronze_payments)
+    df = df.dropna(how="all")
+    # Dedup if you have a natural key
+    key = "payment_id" if "payment_id" in df.columns else None
+    if key:
+        df = df.dropDuplicates([key])
+    else:
+        df = df.dropDuplicates()
 
-        clean = (
-            src
-            .filter(col("event_ts").isNotNull())
-            .withWatermark("event_ts", "30 minutes")
-            # prefer payment_id + event_ts as a stable dedupe key
-            .dropDuplicates(["payment_id", "event_ts"])
-        )
+    target = f"{DB}.payments_clean"
+    (df.write
+       .format("delta")
+       .mode("overwrite")
+       .option("overwriteSchema", "true")
+       .saveAsTable(target))
 
-        q = (
-            clean.writeStream
-            .format("delta")
-            .option("checkpointLocation", ckpt)
-            .trigger(availableNow=True)      # process new data then exit
-            .outputMode("append")
-            .start(out)
-        )
-
-        logger.info("payments_clean micro-batch running…")
-        q.awaitTermination()
-        logger.info("payments_clean micro-batch complete")
-
-    except Exception as e:
-        logger.error("silver-payments failed", exc_info=True)
-        raise
+    spark.stop()
 
 if __name__ == "__main__":
     main()
