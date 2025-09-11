@@ -1,49 +1,75 @@
-#!/usr/bin/env python3
-import os
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, to_timestamp, to_date, row_number, sha2, concat_ws, lit
+from pyspark.sql.types import StructType, StructField, StringType, LongType, DoubleType
+from pyspark.sql import Window
+from delta.tables import DeltaTable
 
-LAKE = os.getenv("LAKEHOUSE_URI", "s3a://delta-lake")
-DB   = "silver"
+FS = "s3a://delta-lake"
+SILVER_LOC = f"{FS}/warehouse/silver.db"
+PAY_LOC = f"{SILVER_LOC}/payments_clean"
 
-def spark_session(app="silver_jobs"):
-    return (
-        SparkSession.builder
-        .appName(app)
-        .enableHiveSupport()
-        # ---- resource caps (per-app) ----
-        .config("spark.executor.cores", "1")   # 1 core per executor
-        .config("spark.cores.max", "1")        # 1 core total for the app
-        .config("spark.executor.instances", "1")  # (belt & braces) single executor
+payments_schema = StructType([
+    StructField("type", StringType()),          # e.g. "payment.succeeded"
+    StructField("order_id", LongType()),
+    StructField("amount_cents", LongType()),
+    StructField("currency", StringType()),
+    StructField("user_email", StringType())
+])
+
+spark = (SparkSession.builder
+        .appName("silver_payments")
+        .config("spark.sql.extensions","io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog","org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .config("spark.executor.cores", "1")
+        .config("spark.cores.max", "1")
         .config("spark.executor.memory", "1g")
         .config("spark.driver.memory", "1g")
         .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
+        .getOrCreate())
+
+spark.sql("CREATE SCHEMA IF NOT EXISTS silver")
+
+raw = spark.table("bronze_raw.payments_raw")
+
+w = Window.partitionBy("topic","partition","offset").orderBy(col("kafka_timestamp").desc())
+dedup = (raw.withColumn("rn", row_number().over(w))
+             .filter(col("rn")==1)
+             .drop("rn"))
+
+parsed = (dedup
+    .select("topic","partition","offset","kafka_timestamp",
+            from_json(col("raw_value"), payments_schema).alias("j"))
+    .select(
+        col("topic"), col("partition"), col("offset"), col("kafka_timestamp"),
+        col("j.order_id").cast("string").alias("order_id"),
+        (col("j.amount_cents").cast("double")/ lit(100.0)).alias("amount"),
+        col("j.currency").alias("currency"),
+        # fields to keep parity with earlier schema
+        col("j.type").alias("status"),    # simple mapping; you can normalize to SUCCEEDED/PENDING later
+        lit(None).cast("string").alias("method"),
+        lit(None).cast("string").alias("event_time"),
+        lit(None).cast("string").alias("ingest_ts"),
+        # synthetic IDs for idempotency & lineage
+        sha2(concat_ws(":", col("topic"), col("partition").cast("string"), col("offset").cast("string")), 256).alias("event_id"),
+        sha2(concat_ws(":", col("topic"), col("partition").cast("string"), col("offset").cast("string")), 256).alias("payment_id")
     )
+    .withColumn("event_ts", col("kafka_timestamp"))
+    .withColumn("event_date", to_date("event_ts"))
+)
 
-def main():
-    spark = spark_session("silver_payments")
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {DB}")
-    spark.sql(f"ALTER DATABASE {DB} SET LOCATION 's3a://delta-lake/warehouse/{DB}.db'")
+if DeltaTable.isDeltaTable(spark, PAY_LOC):
+    tgt = DeltaTable.forPath(spark, PAY_LOC)
+    (tgt.alias("t")
+        .merge(parsed.alias("s"),
+               "t.topic = s.topic AND t.partition = s.partition AND t.offset = s.offset")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute())
+else:
+    (parsed.write.format("delta")
+           .mode("overwrite")
+           .option("overwriteSchema","true")
+           .save(PAY_LOC))
+    spark.sql(f"CREATE TABLE IF NOT EXISTS silver.payments_clean USING DELTA LOCATION '{PAY_LOC}'")
 
-    payments_src = f"{LAKE}/bronze/payments"
-    df = spark.read.format("delta").load(payments_src)
-
-    df = df.dropna(how="all")
-    # Dedup if you have a natural key
-    key = "payment_id" if "payment_id" in df.columns else None
-    if key:
-        df = df.dropDuplicates([key])
-    else:
-        df = df.dropDuplicates()
-
-    target = f"{DB}.payments_clean"
-    (df.write
-       .format("delta")
-       .mode("overwrite")
-       .option("overwriteSchema", "true")
-       .saveAsTable(target))
-
-    spark.stop()
-
-if __name__ == "__main__":
-    main()
+spark.stop()

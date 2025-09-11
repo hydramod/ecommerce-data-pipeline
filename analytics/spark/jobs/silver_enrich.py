@@ -1,59 +1,58 @@
-#!/usr/bin/env python3
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, sum as _sum, max as _max, coalesce, greatest, lit
+from delta.tables import DeltaTable
 
-DB = "silver"
+FS = "s3a://delta-lake"
+SILVER = f"{FS}/warehouse/silver.db"
+ENRICH_LOC = f"{SILVER}/order_payments_enriched"
 
-def spark_session(app="silver_jobs"):
-    return (
-        SparkSession.builder
-        .appName(app)
-        .enableHiveSupport()
-        # ---- resource caps (per-app) ----
-        .config("spark.executor.cores", "1")   # 1 core per executor
-        .config("spark.cores.max", "1")        # 1 core total for the app
-        .config("spark.executor.instances", "1")  # (belt & braces) single executor
+spark = (SparkSession.builder
+        .appName("silver_enriched")
+        .config("spark.sql.extensions","io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog","org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        .config("spark.executor.cores", "1")
+        .config("spark.cores.max", "1")
         .config("spark.executor.memory", "1g")
         .config("spark.driver.memory", "1g")
         .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
-    )
+        .getOrCreate())
 
-def main():
-    spark = spark_session("silver_enrich")
-    spark.sql(f"CREATE DATABASE IF NOT EXISTS {DB}")
-    spark.sql(f"ALTER DATABASE {DB} SET LOCATION 's3a://delta-lake/warehouse/{DB}.db'")
+spark.sql("CREATE SCHEMA IF NOT EXISTS silver")
 
-    orders   = spark.table(f"{DB}.orders_clean")
-    payments = spark.table(f"{DB}.payments_clean")
+orders = (spark.table("silver.orders_clean")
+          .select("order_id","user_id","total_amount","currency","event_ts"))
 
-    # Choose a join key. Prefer 'order_id' if present on both.
-    join_cols = set(orders.columns) & set(payments.columns)
-    if "order_id" in join_cols:
-        enriched = (
-            orders.alias("o")
-            .join(payments.alias("p"), on="order_id", how="left")
-        )
-    else:
-        # Fallback: leave as orders only (adjust if your schema differs)
-        enriched = orders
+pays_agg = (spark.table("silver.payments_clean")
+            .groupBy("order_id")
+            .agg(_sum("amount").alias("paid_amount"),
+                 _max("event_ts").alias("last_payment_ts"),
+                 )
+           )
 
-    # Example derived fields; keep your real logic if you had it:
-    if "amount" in payments.columns:
-        totals = payments.groupBy("order_id").agg(F.sum("amount").alias("paid_amount"))
-        enriched = (
-            orders.alias("o")
-            .join(totals.alias("t"), on="order_id", how="left")
-            .withColumn("paid_amount", F.coalesce(F.col("paid_amount"), F.lit(0.0)))
-        )
+enriched = (orders.alias("o")
+            .join(pays_agg.alias("p"), "order_id", "left")
+            .select(
+                col("order_id"),
+                col("o.user_id").alias("user_id"),
+                col("o.total_amount").alias("total_amount"),
+                col("o.currency").alias("currency"),
+                coalesce(col("p.paid_amount"), lit(0.0)).alias("paid_amount"),
+                (coalesce(col("p.paid_amount"), lit(0.0)) >= col("o.total_amount")).alias("fully_paid"),
+                col("o.event_ts").alias("order_ts"),
+                col("p.last_payment_ts").alias("last_payment_ts"),
+                greatest(col("o.event_ts"), coalesce(col("p.last_payment_ts"), col("o.event_ts"))).alias("updated_ts")
+            ))
 
-    target = f"{DB}.order_payments_enriched"
-    (enriched.write
-        .format("delta")
-        .mode("overwrite")
-        .option("overwriteSchema","true")
-        .saveAsTable(target))
+if DeltaTable.isDeltaTable(spark, ENRICH_LOC):
+    tgt = DeltaTable.forPath(spark, ENRICH_LOC)
+    # one row per order_id; upsert safely
+    (tgt.alias("t")
+        .merge(enriched.alias("s"), "t.order_id = s.order_id")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute())
+else:
+    (enriched.write.format("delta").mode("overwrite").save(ENRICH_LOC))
+    spark.sql(f"CREATE TABLE IF NOT EXISTS silver.order_payments_enriched USING DELTA LOCATION '{ENRICH_LOC}'")
 
-    spark.stop()
-
-if __name__ == "__main__":
-    main()
+spark.stop()

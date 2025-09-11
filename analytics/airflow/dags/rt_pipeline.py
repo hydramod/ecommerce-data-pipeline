@@ -31,26 +31,25 @@ SILVER_APP_ARGS = []
 # ---------------------------------------------------------------------------
 
 with DAG(
-    dag_id="bronze_streams",
-    description="Continuously ingest Kafka events to Delta bronze (orders, payments)",
+    dag_id="bronze_streams_raw",
+    description="Micro-batch raw Kafka -> Delta bronze_raw",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2025, 8, 1),
-    schedule="@once",          # start once, keep running
+    schedule="@once", 
     catchup=False,
     max_active_runs=1,
-    tags=["ecommerce", "streaming", "bronze"],
+    tags=["ecommerce", "streaming", "bronze_raw"],
 ) as bronze_dag:
 
     payments_bronze_stream = BashOperator(
-        task_id="payments_bronze_stream",
-        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_payments.py",
-        pool="streaming"
+        task_id="payments_bronze_raw",
+        bash_command=f"exec /opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_payments_raw.py",
+        pool="streaming",
     )
-
     orders_bronze_stream = BashOperator(
-        task_id="orders_bronze_stream",
-        bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_orders.py",
-        pool="streaming"
+        task_id="orders_bronze_raw",
+        bash_command=f"exec /opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/bronze_orders_raw.py",
+        pool="streaming",
     )
 
     # No dependency between the two bronze streams; they run independently
@@ -74,19 +73,23 @@ with DAG(
     tags=["ecommerce", "batch", "silver"],
 ) as silver_dag:
 
-    # If you already have these scripts, keep the paths.
-    # Otherwise, point them to your actual silver job scripts.
     silver_orders = BashOperator(
         task_id="silver_orders",
         bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_orders.py",
+        pool="batch",
+        priority_weight=10,
     )
     silver_payments = BashOperator(
         task_id="silver_payments",
         bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_payments.py",
+        pool="batch",
+        priority_weight=10,
     )
     silver_enrich = BashOperator(
         task_id="silver_enrich",
         bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_enrich.py",
+        pool="batch",
+        priority_weight=9,
     )
 
     # Both silver tables first → then enrichment/join
