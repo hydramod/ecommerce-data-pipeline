@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.models.baseoperator import chain
 from airflow.operators.bash import BashOperator
+from airflow.datasets import Dataset
 
 # ---------------------------------------------------------------------------
 # Common config
@@ -23,6 +24,15 @@ SPARK_CONN_ID = "spark_default"
 # Extra application args (optional). Keep empty unless your scripts accept args.
 BRONZE_APP_ARGS = []
 SILVER_APP_ARGS = []
+
+DBT_BIN = "/opt/bitnami/airflow/venv/bin/dbt"
+
+# Where your dbt project lives inside the Airflow container
+DBT_PROJECT_DIR = "/opt/dbt/ecom_analytics"
+DBT_PROFILES_DIR = "/opt/dbt"     # profiles.yml here
+DBT_TARGET = "dev"
+
+ORDERS_ENRICHED_DS = Dataset("delta://silver/order_payments_enriched")
 
 # ---------------------------------------------------------------------------
 # DAG 1: Bronze streams (always-on)
@@ -90,7 +100,54 @@ with DAG(
         bash_command=f"/opt/spark/bin/spark-submit --master spark://spark-master:7077 --deploy-mode client {JOBS_DIR}/silver_enrich.py",
         pool="batch",
         priority_weight=9,
+        outlets=[ORDERS_ENRICHED_DS],
     )
 
     # Both silver tables first → then enrichment/join
     chain([silver_orders, silver_payments], silver_enrich)
+
+# ---------------------------------------------------------------------------
+# DAG 3: Gold (dbt) – builds downstream marts/views from Silver
+#   - Runs dbt against Trino (per your profiles.yml)
+#   - Triggers when enrisch is done
+# ---------------------------------------------------------------------------
+
+with DAG(
+    dag_id="gold_dbt",
+    description="dbt build of Gold marts (e.g., fct_sales_minute) from Silver",
+    default_args=DEFAULT_ARGS,
+    start_date=datetime(2025, 8, 1),
+    schedule=[ORDERS_ENRICHED_DS],      # tighten/loosen as you like
+    catchup=False,
+    max_active_runs=1,
+    tags=["ecommerce", "gold", "dbt"],
+) as gold_dag:
+
+    # Build only your gold model(s). Use 'dbt build' so tests run too.
+    dbt_build_gold = BashOperator(
+        task_id="dbt_build_gold",
+        bash_command=(
+            "set -euo pipefail\n"
+            "export DBT_PROFILES_DIR={profiles}\n"
+            "export HOME=/tmp\n"
+            "cd {proj}\n"
+            "echo '=== dbt version ==='\n"
+            "{dbt} --version\n"
+            "echo '=== project files ==='\n"
+            "ls -la\n"
+            "echo '=== dbt debug ==='\n"
+            "{dbt} debug --profiles-dir {profiles} --target {target} --debug\n"
+            "echo '=== dbt deps ==='\n"
+            "{dbt} deps --profiles-dir {profiles}\n"
+            "echo '=== dbt build (fct_sales_minute) ==='\n"
+            "{dbt} build --profiles-dir {profiles} --target {target} --select fct_sales_minute --debug"
+        ).format(dbt=DBT_BIN, proj=DBT_PROJECT_DIR, profiles=DBT_PROFILES_DIR, target=DBT_TARGET),
+        env={
+            # set if your Trino needs creds:
+            # "TRINO_USER": "admin",
+            # "TRINO_PASSWORD": "..."
+        },
+        pool="dbt",
+        priority_weight=8,
+    )
+

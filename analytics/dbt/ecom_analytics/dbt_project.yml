@@ -1,12 +1,12 @@
-name: ecommerce_analytics
+name: "ecom_analytics"
 version: 1.0.0
 config-version: 2
 
-profile: trino_lake
+profile: "ecom_analytics"
 
 model-paths: ["models"]
 models:
-  ecommerce_analytics:
+  ecom_analytics:
     +materialized: view
     gold:
       +materialized: incremental

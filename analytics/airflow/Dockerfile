@@ -89,17 +89,15 @@ RUN curl -fsSL -o /opt/spark/jars/spark-sql-kafka-0-10_2.12-3.5.2.jar \
 # >>> Copy the fully-resolved Hive 3.1.3 client jars into the driver image <<<
 COPY --from=hive3-resolver /tmp/hive3 /opt/spark/hive3
 
-# (Optional) bake these into spark-defaults.conf, or mount at runtime:
-#   spark.sql.hive.metastore.jars=/opt/spark/hive3/*
-#   spark.sql.hive.metastore.version=${HIVE_CLIENT_VERSION}
-
-# Python libs – pin to Spark line (UNCHANGED)
+# Python libs
 RUN /opt/bitnami/airflow/venv/bin/pip install --no-cache-dir \
       "apache-airflow-providers-apache-spark>=5.3.2" \
       "apache-airflow-providers-common-compat>=1.5.0" \
       "pyspark==3.5.2" \
       "delta-spark==3.2.0" \
       "graphviz" \
-      "grpcio-status>=1.59.0"
+      "grpcio-status>=1.59.0" \
+      "dbt-core>=1.8,<1.10" \
+      "dbt-trino>=1.8,<1.10"
 
 ENV AIRFLOW__CORE__LOAD_DEFAULT_CONNECTIONS="False"

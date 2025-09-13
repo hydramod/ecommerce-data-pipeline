@@ -1,0 +1,10 @@
+version: 2
+exposures:
+  - name: sales_realtime_dashboard
+    type: dashboard
+    maturity: high
+    owner: { name: Analytics, email: data@yourco.com }
+    depends_on:
+      - ref('fct_sales_minute')
+    url: https://<your-bi-tool>/dashboard/123
+    description: Real-time sales KPIs (last 60 minutes).
