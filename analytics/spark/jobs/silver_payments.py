@@ -1,80 +1,75 @@
-import os
-import logging
-import time
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, from_json, to_timestamp, to_date, row_number, sha2, concat_ws, lit
+from pyspark.sql.types import StructType, StructField, StringType, LongType, DoubleType
+from pyspark.sql import Window
 from delta.tables import DeltaTable
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+FS = "s3a://delta-lake"
+SILVER_LOC = f"{FS}/warehouse/silver.db"
+PAY_LOC = f"{SILVER_LOC}/payments_clean"
 
-def spark_session():
-    return (
-        SparkSession.builder
-        .appName("silver-payments")
-        # ---- resource caps (per-app) ----
+payments_schema = StructType([
+    StructField("type", StringType()),          # e.g. "payment.succeeded"
+    StructField("order_id", LongType()),
+    StructField("amount_cents", LongType()),
+    StructField("currency", StringType()),
+    StructField("user_email", StringType())
+])
+
+spark = (SparkSession.builder
+        .appName("silver_payments")
+        .config("spark.sql.extensions","io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog","org.apache.spark.sql.delta.catalog.DeltaCatalog")
         .config("spark.executor.cores", "1")
         .config("spark.cores.max", "1")
         .config("spark.executor.memory", "1g")
         .config("spark.driver.memory", "1g")
-        # ---- general ----
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.shuffle.partitions", os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "4"))
-        .getOrCreate()
+        .config("spark.sql.shuffle.partitions", "4")
+        .getOrCreate())
+
+spark.sql("CREATE SCHEMA IF NOT EXISTS silver")
+
+raw = spark.table("bronze_raw.payments_raw")
+
+w = Window.partitionBy("topic","partition","offset").orderBy(col("kafka_timestamp").desc())
+dedup = (raw.withColumn("rn", row_number().over(w))
+             .filter(col("rn")==1)
+             .drop("rn"))
+
+parsed = (dedup
+    .select("topic","partition","offset","kafka_timestamp",
+            from_json(col("raw_value"), payments_schema).alias("j"))
+    .select(
+        col("topic"), col("partition"), col("offset"), col("kafka_timestamp"),
+        col("j.order_id").cast("string").alias("order_id"),
+        (col("j.amount_cents").cast("double")/ lit(100.0)).alias("amount"),
+        col("j.currency").alias("currency"),
+        # fields to keep parity with earlier schema
+        col("j.type").alias("status"),    # simple mapping; you can normalize to SUCCEEDED/PENDING later
+        lit(None).cast("string").alias("method"),
+        lit(None).cast("string").alias("event_time"),
+        lit(None).cast("string").alias("ingest_ts"),
+        # synthetic IDs for idempotency & lineage
+        sha2(concat_ws(":", col("topic"), col("partition").cast("string"), col("offset").cast("string")), 256).alias("event_id"),
+        sha2(concat_ws(":", col("topic"), col("partition").cast("string"), col("offset").cast("string")), 256).alias("payment_id")
     )
+    .withColumn("event_ts", col("kafka_timestamp"))
+    .withColumn("event_date", to_date("event_ts"))
+)
 
-def wait_for_delta(spark, path, timeout=None, poll=5):
-    """Wait until `path` is an initialized Delta table (has at least one commit)."""
-    timeout = int(timeout or os.getenv("SILVER_WAIT_TIMEOUT_SECS", "900"))
-    logger.info(f"Waiting for Delta table at {path} (timeout={timeout}s)…")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            if DeltaTable.isDeltaTable(spark, path):
-                logger.info(f"Delta table is ready: {path}")
-                return
-        except Exception:
-            pass
-        time.sleep(poll)
-    raise TimeoutError(f"Delta table not found at {path} after {timeout}s")
+if DeltaTable.isDeltaTable(spark, PAY_LOC):
+    tgt = DeltaTable.forPath(spark, PAY_LOC)
+    (tgt.alias("t")
+        .merge(parsed.alias("s"),
+               "t.topic = s.topic AND t.partition = s.partition AND t.offset = s.offset")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute())
+else:
+    (parsed.write.format("delta")
+           .mode("overwrite")
+           .option("overwriteSchema","true")
+           .save(PAY_LOC))
+    spark.sql(f"CREATE TABLE IF NOT EXISTS silver.payments_clean USING DELTA LOCATION '{PAY_LOC}'")
 
-def main():
-    try:
-        lakehouse = os.getenv("LAKEHOUSE_URI", "s3a://delta-lake")
-        bronze_payments = f"{lakehouse}/bronze/payments"
-        ckpt = f"{lakehouse}/_chk/silver/payments_clean"
-        out  = f"{lakehouse}/silver/payments_clean"
-
-        spark = spark_session()
-        logger.info("Spark session started")
-
-        wait_for_delta(spark, bronze_payments)
-        src = spark.readStream.format("delta").load(bronze_payments)
-
-        clean = (
-            src
-            .filter(col("event_ts").isNotNull())
-            .withWatermark("event_ts", "30 minutes")
-            # prefer payment_id + event_ts as a stable dedupe key
-            .dropDuplicates(["payment_id", "event_ts"])
-        )
-
-        q = (
-            clean.writeStream
-            .format("delta")
-            .option("checkpointLocation", ckpt)
-            .trigger(availableNow=True)      # process new data then exit
-            .outputMode("append")
-            .start(out)
-        )
-
-        logger.info("payments_clean micro-batch running…")
-        q.awaitTermination()
-        logger.info("payments_clean micro-batch complete")
-
-    except Exception as e:
-        logger.error("silver-payments failed", exc_info=True)
-        raise
-
-if __name__ == "__main__":
-    main()
+spark.stop()

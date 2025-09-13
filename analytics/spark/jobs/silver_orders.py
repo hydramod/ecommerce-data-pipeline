@@ -1,78 +1,87 @@
-import os
-import logging
-import time
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, from_json, to_timestamp, to_date, row_number
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, ArrayType, IntegerType
+from pyspark.sql import Window
 from delta.tables import DeltaTable
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("silver-orders")
+FS = "s3a://delta-lake"
+SILVER_LOC = f"{FS}/warehouse/silver.db"
+ORDERS_LOC = f"{SILVER_LOC}/orders_clean"
 
-def spark_session():
-    return (
-        SparkSession.builder
-        .appName("silver-orders")
-        # ---- resource caps (per-app) ----
+orders_schema = StructType([
+    StructField("event_type", StringType()),
+    StructField("event_version", StringType()),
+    StructField("trace_id", StringType()),
+    StructField("order_id", StringType()),   # cast to string regardless of source type
+    StructField("user_id", StringType()),
+    StructField("items", ArrayType(StructType([
+        StructField("product_id", IntegerType()),
+        StructField("qty", IntegerType()),
+        StructField("price", DoubleType())
+    ]))),
+    StructField("currency", StringType()),
+    StructField("total_amount", DoubleType()),
+    StructField("status", StringType()),
+    StructField("event_time", StringType()),
+    StructField("shipping", StructType([])), # ignored for now
+    StructField("event_id", StringType()),
+    StructField("ingest_ts", StringType()),
+])
+
+spark = (SparkSession.builder
+        .appName("silver_orders")
+        .config("spark.sql.extensions","io.delta.sql.DeltaSparkSessionExtension")
+        .config("spark.sql.catalog.spark_catalog","org.apache.spark.sql.delta.catalog.DeltaCatalog")
         .config("spark.executor.cores", "1")
         .config("spark.cores.max", "1")
         .config("spark.executor.memory", "1g")
         .config("spark.driver.memory", "1g")
-        # ---- general ----
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.shuffle.partitions", os.getenv("SPARK_SQL_SHUFFLE_PARTITIONS", "4"))
-        .getOrCreate()
+        .config("spark.sql.shuffle.partitions", "4")
+        .getOrCreate())
+
+spark.sql("CREATE SCHEMA IF NOT EXISTS silver")
+
+raw = spark.table("bronze_raw.orders_raw")
+
+# Deduplicate by Kafka identity
+w = Window.partitionBy("topic","partition","offset").orderBy(col("kafka_timestamp").desc())
+dedup = (raw.withColumn("rn", row_number().over(w))
+             .filter(col("rn")==1)
+             .drop("rn"))
+
+parsed = (dedup
+    .select("topic","partition","offset","kafka_timestamp",
+            from_json(col("raw_value"), orders_schema).alias("j"))
+    .select(
+        col("topic"), col("partition"), col("offset"), col("kafka_timestamp"),
+        col("j.event_type").alias("event_type"),
+        col("j.order_id").cast("string").alias("order_id"),
+        col("j.user_id").alias("user_id"),
+        col("j.items").alias("items"),
+        col("j.currency").alias("currency"),
+        col("j.total_amount").cast("double").alias("total_amount"),
+        col("j.status").alias("status"),
+        col("j.event_time").alias("event_time"),
+        col("j.event_id").alias("event_id"),
+        col("j.ingest_ts").alias("ingest_ts")
     )
+    .withColumn("event_ts", to_timestamp("event_time"))
+    .withColumn("event_date", to_date("event_ts"))
+)
 
-def wait_for_delta(spark, path, timeout=None, poll=5):
-    """Wait until `path` is an initialized Delta table (has at least one commit)."""
-    timeout = int(timeout or os.getenv("SILVER_WAIT_TIMEOUT_SECS", "900"))
-    logger.info(f"Waiting for Delta table at {path} (timeout={timeout}s)…")
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            if DeltaTable.isDeltaTable(spark, path):
-                logger.info(f"Delta table is ready: {path}")
-                return
-        except Exception:
-            pass
-        time.sleep(poll)
-    raise TimeoutError(f"Delta table not found at {path} after {timeout}s")
+if DeltaTable.isDeltaTable(spark, ORDERS_LOC):
+    tgt = DeltaTable.forPath(spark, ORDERS_LOC)
+    (tgt.alias("t")
+        .merge(parsed.alias("s"),
+               "t.topic = s.topic AND t.partition = s.partition AND t.offset = s.offset")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute())
+else:
+    (parsed.write.format("delta")
+           .mode("overwrite")
+           .option("overwriteSchema","true")
+           .save(ORDERS_LOC))
+    spark.sql(f"CREATE TABLE IF NOT EXISTS silver.orders_clean USING DELTA LOCATION '{ORDERS_LOC}'")
 
-def main():
-    lakehouse = os.getenv("LAKEHOUSE_URI", "s3a://delta-lake")
-    bronze_orders = f"{lakehouse}/bronze/orders"
-    ckpt = f"{lakehouse}/_chk/silver/orders_clean"
-    out  = f"{lakehouse}/silver/orders_clean"
-
-    spark = spark_session()
-    logger.info("Spark session started")
-
-    # Wait for Bronze to publish its first commit
-    wait_for_delta(spark, bronze_orders)
-
-    src = spark.readStream.format("delta").load(bronze_orders)
-
-    clean = (
-        src
-        .filter(col("event_ts").isNotNull())
-        .withWatermark("event_ts", "30 minutes")
-        .dropDuplicates(["order_id", "event_ts"])
-        .filter(col("total_amount").isNotNull())
-    )
-
-    q = (
-        clean.writeStream
-        .format("delta")
-        .option("checkpointLocation", ckpt)
-        .trigger(availableNow=True)  # process what's new then exit
-        .outputMode("append")
-        .start(out)
-    )
-
-    logger.info("orders_clean micro-batch running…")
-    q.awaitTermination()
-    logger.info("orders_clean micro-batch complete")
-    spark.stop()
-
-if __name__ == "__main__":
-    main()
+spark.stop()

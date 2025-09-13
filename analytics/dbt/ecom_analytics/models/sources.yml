@@ -1,0 +1,14 @@
+sources:
+  - name: silver
+    database: delta
+    schema: silver
+    description: "Delta Lake silver layer tables (served by Trino)"
+    freshness:
+      error_after: {count: 2, period: hour}
+    tables:
+      - name: orders_clean
+        loaded_at_field: event_ts
+      - name: payments_clean
+        loaded_at_field: event_ts
+      - name: order_payments_enriched
+        loaded_at_field: event_ts

@@ -35,8 +35,7 @@ services:
       - "8089:8080"          # http://localhost:8089
     depends_on:
       - postgres
-    networks:
-      - mesh
+    networks: [mesh]
 
   redis:
     image: redis:7
@@ -92,6 +91,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks: [mesh]
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set minio http://minio:9000 ${S3_ACCESS_KEY:-admin} ${S3_SECRET_KEY:-adminadmin};
+      mc mb minio/${S3_LAKE_BUCKET:-delta-lake} || true;
+      mc anonymous set download minio/${S3_LAKE_BUCKET:-delta-lake};
+      echo 'Bucket initialization complete';
+      "
     networks: [mesh]
 
   mailhog:
@@ -308,21 +322,25 @@ services:
       - ../deploy/kafka/init-topics.sh:/deploy/kafka/init-topics.sh
     depends_on:
       - kafka
-    networks:
-      - mesh
+    networks: [mesh]
 
   hive-metastore:
-    image: apache/hive:standalone-metastore-4.1.0
+    #build: ../analytics/hive
+    image: ecom-hive:latest
     user: "0:0"
-    entrypoint: ["/bin/bash","-lc"]
-    command: >
-      "
-      set -euo pipefail;
-      curl -fSL -o /tmp/postgresql-42.7.7.jar https://jdbc.postgresql.org/download/postgresql-42.7.7.jar;
-      export HADOOP_CLASSPATH=/tmp/postgresql-42.7.7.jar;
-      /opt/hive/bin/schematool -dbType postgres -initOrUpgradeSchema -verbose || true;
-      exec /opt/hive/bin/start-metastore
-      "
+    entrypoint: ["/bin/bash"]
+    command:
+      - -lc
+      - |
+        set -euo pipefail;
+        echo "[HMS] validating schema...";
+        if ! /opt/hive/bin/schematool -dbType postgres -validate; then
+          echo "[HMS] initializing/upgrading schema...";
+          /opt/hive/bin/schematool -dbType postgres -initSchema -verbose ||
+          /opt/hive/bin/schematool -dbType postgres -upgradeSchema -verbose;
+        fi;
+        echo "[HMS] starting metastore...";
+        exec /opt/hive/bin/hive --service metastore -p 9083 -hiveconf hive.root.logger=INFO,console
     environment:
       HIVE_HOME: /opt/hive
       HIVE_CONF_DIR: /opt/hive/conf
@@ -401,13 +419,12 @@ services:
       NSS_WRAPPER_PASSWD: ""
       NSS_WRAPPER_GROUP: ""
       LD_PRELOAD: ""
-      USER: root
-      HADOOP_PROXY_USER: root
+      USER: root   
       HADOOP_USER_NAME: root
       SPARK_USER: root
       JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
-      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_LOAD_EXAMPLES: False
       AIRFLOW_EXECUTOR: LocalExecutor
       AIRFLOW__CORE__PARALLELISM: "32"
       AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
@@ -435,7 +452,7 @@ services:
       - ../analytics/airflow/dags:/opt/bitnami/airflow/dags
       - ../analytics/spark/jobs:/opt/jobs
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
-      - ./airflow-connections.yaml:/opt/bitnami/airflow/airflow-connections.yml:ro
+      - ./airflow/airflow-connections.yaml:/opt/bitnami/airflow/airflow-connections.yml:ro
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
     command:
       - /bin/sh
@@ -444,7 +461,6 @@ services:
         /opt/bitnami/airflow/venv/bin/airflow db migrate &&
         /opt/bitnami/airflow/venv/bin/airflow connections import /opt/bitnami/airflow/airflow-connections.yml
 
-
   airflow-webserver:
     image: ecom-airflow:latest
     user: "0:0"
@@ -452,13 +468,12 @@ services:
       NSS_WRAPPER_PASSWD: ""
       NSS_WRAPPER_GROUP: ""
       LD_PRELOAD: ""
-      USER: root
-      HADOOP_PROXY_USER: root
+      USER: root     
       HADOOP_USER_NAME: root
       SPARK_USER: root
       JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
-      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_LOAD_EXAMPLES: False
       AIRFLOW_EXECUTOR: LocalExecutor
       AIRFLOW__CORE__PARALLELISM: "32"
       AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
@@ -498,6 +513,8 @@ services:
       - ../analytics/spark/jobs:/opt/jobs
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
+      - ../analytics/dbt/ecom_analytics:/opt/dbt/ecom_analytics
+      - ../analytics/dbt/profiles.yml:/opt/dbt/profiles.yml
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 20s
@@ -512,13 +529,12 @@ services:
       NSS_WRAPPER_PASSWD: ""
       NSS_WRAPPER_GROUP: ""
       LD_PRELOAD: ""
-      USER: root
-      HADOOP_PROXY_USER: root
+      USER: root  
       HADOOP_USER_NAME: root
       SPARK_USER: root
       JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
-      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_LOAD_EXAMPLES: False
       AIRFLOW_EXECUTOR: LocalExecutor
       AIRFLOW__CORE__PARALLELISM: "32"
       AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
@@ -554,6 +570,8 @@ services:
       - ../analytics/spark/jobs:/opt/jobs
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
+      - ../analytics/dbt/ecom_analytics:/opt/dbt/ecom_analytics
+      - ../analytics/dbt/profiles.yml:/opt/dbt/profiles.yml
 
   airflow-triggerer:
     image: ecom-airflow:latest
@@ -563,12 +581,11 @@ services:
       NSS_WRAPPER_GROUP: ""
       LD_PRELOAD: ""
       USER: root
-      HADOOP_PROXY_USER: root
       HADOOP_USER_NAME: root
       SPARK_USER: root
       JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
-      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_LOAD_EXAMPLES: False
       AIRFLOW_EXECUTOR: LocalExecutor
       AIRFLOW__CORE__PARALLELISM: "32"
       AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
@@ -599,6 +616,8 @@ services:
       - ../analytics/spark/jobs:/opt/jobs
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
+      - ../analytics/dbt/ecom_analytics:/opt/dbt/ecom_analytics
+      - ../analytics/dbt/profiles.yml:/opt/dbt/profiles.yml
 
   airflow-dag-processor:
     image: ecom-airflow:latest
@@ -607,13 +626,12 @@ services:
       NSS_WRAPPER_PASSWD: ""
       NSS_WRAPPER_GROUP: ""
       LD_PRELOAD: ""
-      USER: root
-      HADOOP_PROXY_USER: root
+      USER: root  
       HADOOP_USER_NAME: root
       SPARK_USER: root
       JAVA_TOOL_OPTIONS: "-Duser.name=root"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://postgres:postgres@postgres:5432/airflow}
-      AIRFLOW_LOAD_EXAMPLES: "no"
+      AIRFLOW_LOAD_EXAMPLES: False
       AIRFLOW_EXECUTOR: LocalExecutor
       AIRFLOW__CORE__PARALLELISM: "32"
       AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "16"
@@ -644,16 +662,16 @@ services:
       - ../analytics/spark/jobs:/opt/jobs
       - ../analytics/airflow/logs:/opt/bitnami/airflow/logs
       - ../analytics/spark/conf:/opt/bitnami/spark/conf
+      - ../analytics/dbt/ecom_analytics:/opt/dbt/ecom_analytics
+      - ../analytics/dbt/profiles.yml:/opt/dbt/profiles.yml
 
   trino:
-    image: trinodb/trino:443
+    #build: ../analytics/trino
+    image: ecom-trino
     ports: ["${TRINO_HTTP_PORT:-8090}:8080"]
-    environment:
-      TRINO_CATALOG: ${TRINO_CATALOG:-delta}
-      TRINO_SCHEMA: ${TRINO_SCHEMA:-default}
     volumes:
       - ../analytics/trino:/etc/trino
-    depends_on: 
+    depends_on:
       - hive-metastore
     networks: [mesh]
     healthcheck:
@@ -673,7 +691,8 @@ services:
     networks: [mesh]
 
 networks:
-  mesh: {}
+  mesh:
+    name: deploy-mesh
 
 volumes:
   lake: {}
