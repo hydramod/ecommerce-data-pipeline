@@ -1,7 +1,3 @@
-Here’s an updated README you can drop in as-is.
-
----
-
 # Ecommerce Microservices – Analytics Pipeline
 
 Real-time analytics over the e-commerce event stream using **Kafka → Spark (Bronze/Silver) → dbt (Gold) → Trino → Metabase**. The pipeline delivers near-real-time sales metrics with tests, freshness checks, and lineage.
