@@ -18,6 +18,8 @@ models:
               expression: "paid_orders >= 0"
       - name: processed_ts
         tests: [not_null]
+  - name: vw_sales_last_60min
+    description: Last N minutes of GMV and paid order counts (default 60).
 
 sources:
   - name: silver
