@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time ETL Pipeline Architecture</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 20px;
+        }
+        
+        h1 {
+            font-size: 2.8rem;
+            margin-bottom: 15px;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            color: #a0d2eb;
+            max-width: 800px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+        
+        .architecture {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        
+        .layer {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .layer-title {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #00f2fe;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .components {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .component {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .component:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .component-icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+            color: #4facfe;
+        }
+        
+        .component-title {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+        
+        .component-desc {
+            font-size: 0.9rem;
+            color: #a0d2eb;
+            line-height: 1.5;
+        }
+        
+        .data-flow {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            color: #4facfe;
+            font-size: 2rem;
+        }
+        
+        .arrow {
+            margin: 0 15px;
+        }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 40px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .color-box {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+        
+        .blue { background: #4facfe; }
+        .green { background: #00d2a0; }
+        .purple { background: #a374ff; }
+        .orange { background: #ff9068; }
+        
+        footer {
+            text-align: center;
+            margin-top: 50px;
+            padding: 20px;
+            color: #a0d2eb;
+            font-size: 0.9rem;
+        }
+        
+        @media (max-width: 768px) {
+            .components {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Real-Time ETL Pipeline Architecture</h1>
+            <p class="subtitle">A modern data pipeline using Kafka, Spark Structured Streaming, Airflow, Delta Lake, dbt, Trino, and Metabase for real-time ecommerce analytics</p>
+        </header>
+        
+        <div class="architecture">
+            <div class="layer">
+                <h2 class="layer-title"><i class="fas fa-satellite-dish"></i> Data Ingestion Layer</h2>
+                <div class="components">
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-stream"></i></div>
+                        <h3 class="component-title">Kafka</h3>
+                        <p class="component-desc">Real-time event streaming from orders and payments topics</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-flow">
+                <i class="fas fa-arrow-down"></i>
+            </div>
+            
+            <div class="layer">
+                <h2 class="layer-title"><i class="fas fa-bolt"></i> Processing Layer</h2>
+                <div class="components">
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-code"></i></div>
+                        <h3 class="component-title">Spark Structured Streaming</h3>
+                        <p class="component-desc">Bronze: Raw data ingestion from Kafka to Delta Lake</p>
+                    </div>
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-spinner"></i></div>
+                        <h3 class="component-title">Airflow</h3>
+                        <p class="component-desc">Orchestration of batch processing and DAG management</p>
+                    </div>
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-database"></i></div>
+                        <h3 class="component-title">Delta Lake</h3>
+                        <p class="component-desc">Silver: Cleaned and enriched data in Parquet format</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-flow">
+                <i class="fas fa-arrow-down"></i>
+            </div>
+            
+            <div class="layer">
+                <h2 class="layer-title"><i class="fas fa-cubes"></i> Transformation Layer</h2>
+                <div class="components">
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-wrench"></i></div>
+                        <h3 class="component-title">dbt</h3>
+                        <p class="component-desc">Gold: Building analytics models and transformations</p>
+                    </div>
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-server"></i></div>
+                        <h3 class="component-title">Trino</h3>
+                        <p class="component-desc">Distributed SQL query engine for analytical processing</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-flow">
+                <i class="fas fa-arrow-down"></i>
+            </div>
+            
+            <div class="layer">
+                <h2 class="layer-title"><i class="fas fa-chart-line"></i> Visualization Layer</h2>
+                <div class="components">
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-chart-bar"></i></div>
+                        <h3 class="component-title">Metabase</h3>
+                        <p class="component-desc">Business intelligence and dashboarding for stakeholders</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="data-flow">
+                <i class="fas fa-arrow-down"></i>
+            </div>
+            
+            <div class="layer">
+                <h2 class="layer-title"><i class="fas fa-users"></i> Consumption Layer</h2>
+                <div class="components">
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-user-tie"></i></div>
+                        <h3 class="component-title">Business Users</h3>
+                        <p class="component-desc">Data-driven decision making with real-time insights</p>
+                    </div>
+                    <div class="component">
+                        <div class="component-icon"><i class="fas fa-robot"></i></div>
+                        <h3 class="component-title">Data Scientists</h3>
+                        <p class="component-desc">Advanced analytics and machine learning applications</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="color-box blue"></div>
+                <span>Data Ingestion</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box green"></div>
+                <span>Data Processing</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box purple"></div>
+                <span>Data Transformation</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box orange"></div>
+                <span>Data Consumption</span>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Real-Time Ecommerce Analytics Pipeline | Built with Kafka, Spark, Airflow, Delta Lake, dbt, Trino, and Metabase</p>
+        </footer>
+    </div>
+</body>
+</html>
